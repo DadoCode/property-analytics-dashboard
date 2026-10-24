@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{{ title }} — Fernhill Stays</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="login">
+    <div class="login-box">
+      <div class="brand-row"><div class="mark">FS</div><div><strong>Fernhill</strong><div class="note">Stays</div></div></div>
+      <h1 style="font-size:22px; margin-top:var(--s5)">{{ title }}</h1>
+      <p class="subtitle mb4">{{ message }}</p>
+      <p class="note" style="margin-bottom:var(--s4)">Error {{ code }}</p>
+      <a class="btn" href="/" style="display:block; text-align:center; height:38px; line-height:38px">Back to the dashboard</a>
+    </div>
+  </main>
+</body>
+</html>

@@ -1,0 +1,48 @@
+{% extends "property/_shell.html" %}
+{% from "_components.html" import section, empty_state %}
+{% block tab_content %}
+  {% call section("Expenses", (ledger_total.n ~ " · " ~ (ledger_total.amt|money) ~ " · " ~ ctx.display) if ledger_total.n else ctx.display) %}
+    <p class="note" style="margin:calc(var(--s2) * -1) 0 var(--s3)"><a href="{{ cx('expenses.index', keep_property=True, property=prop.id) }}">Open in Expenses for the full breakdown and filters</a></p>
+    <div class="card flush">
+      {% if expenses %}
+        <table>
+          <thead><tr><th>Date</th><th>Vendor</th><th>Description</th><th>Category</th><th>Type</th><th class="num">Amount</th><th>Source</th></tr></thead>
+          <tbody>
+            {% for e in expenses %}
+              <tr class="clickable" hx-get="{{ url_for('expenses.transaction_drawer', tx_id=e.id) }}" hx-target="#drawer" hx-swap="innerHTML">
+                <td>{{ e.date }}</td>
+                <td class="truncate">{{ e.vendor or '—' }}</td>
+                <td class="truncate note">{{ e.description or '' }}</td>
+                <td>{% if e.category == 'reconciliation' %}<span class="pill" title="Adjustment imported to reconcile historical records with the original Excel accounts.">Historical Adjustment</span>{% else %}{{ e.category|replace('_', ' ')|title }}{% endif %}</td>
+                <td>{{ 'Capex' if e.capex else 'Opex' }}</td>
+                <td class="num">{{ e.amount|money2 }}</td>
+                <td class="note">{{ e.source|replace('_', ' ')|title }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        {{ empty_state("No expenses in " ~ ctx.display, "Nothing has been recorded for " ~ prop.name ~ " in this period. Add one above, import the monthly workbook, or choose a different period.", "Import workbook", url_for('imports.index')) }}
+      {% endif %}
+    </div>
+  {% endcall %}
+  <details class="ws-add">
+    <summary>Add an expense</summary>
+    <form class="mini-form mt0" method="post" action="{{ url_for('properties.add_expense', property_id=prop.id) }}">
+      <input name="vendor" placeholder="Vendor" aria-label="Vendor">
+      <input name="description" placeholder="Description" aria-label="Description">
+      <input name="amount" type="number" step="0.01" placeholder="Amount £" aria-label="Amount in pounds" required>
+      <select name="category" aria-label="Category">
+        <option value="purchase">Purchase</option>
+        <option value="cleaning">Cleaning</option>
+        <option value="utilities">Utilities</option>
+        <option value="booking_income">Booking income</option>
+        <option value="other">Other</option>
+      </select>
+      <select name="month" aria-label="Month">{% for m in range(1,13) %}<option value="{{ m }}" {{ 'selected' if m == month }}>{{ ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m] }}</option>{% endfor %}</select>
+      <select name="year" aria-label="Year"><option value="{{ year }}" selected>{{ year }}</option><option value="{{ year - 1 }}">{{ year - 1 }}</option></select>
+      <button type="submit">Add</button>
+    </form>
+  </details>
+
+{% endblock %}

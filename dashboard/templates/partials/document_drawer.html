@@ -1,0 +1,24 @@
+<div class="drawer-head">
+  <div style="min-width:0">
+    <div class="drawer-title" style="word-break:break-word">{{ doc.filename }}</div>
+    <div class="note">{{ type_label }}</div>
+  </div>
+  <button type="button" class="drawer-close" onclick="closeDrawer()" aria-label="Close">&times;</button>
+</div>
+<div class="mt3">
+  <span class="st {{ 'st-review' if state == 'review' else 'st-pass' if state == 'reviewed' else 'st-nc' }}"><i aria-hidden="true">{{ glyph }}</i> {{ state_label }}</span> <span class="dc-label">Evidence only</span>
+  {% if doc.duplicate_of_document %}<span class="pill warn">Possible duplicate</span>{% endif %}
+</div>
+{% if doc.status == 'failed' and doc.failure_reason %}<p class="note m-t2">{{ doc.failure_reason }}</p>{% endif %}
+<div class="drawer-section">
+  <div class="drawer-field"><span>Property</span><strong>{{ prop.name if prop else 'Property not linked' }}</strong></div>
+  <div class="drawer-field"><span>Period</span><strong>{{ period or 'Period not confirmed' }}</strong></div>
+  <div class="drawer-field"><span>Uploaded</span><strong>{{ doc.uploaded_at[:16] }}</strong></div>
+  <div class="drawer-field"><span>Lines read</span><strong>{{ stats.n }}</strong></div>
+  {% if stats.n %}<div class="drawer-field"><span>Included</span><strong>{{ stats.inc or 0 }} of {{ stats.n }}</strong></div>{% endif %}
+</div>
+{% for w in warnings if w.level == 'warn' %}<p class="note m-t2">⚠ {{ w.message }}</p>{% endfor %}
+<div class="drawer-actions mt4">
+  <a class="btn" href="{{ url_for('documents.review', doc_id=doc.id) }}">{{ 'Open' if doc.status == 'confirmed' else 'Review' }}</a>
+  <a class="btn secondary" href="{{ url_for('documents.file', doc_id=doc.id) }}" target="_blank">Open original</a>
+</div>

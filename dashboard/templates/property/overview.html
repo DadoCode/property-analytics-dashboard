@@ -1,0 +1,114 @@
+{% extends "property/_shell.html" %}
+{% from "_components.html" import section, delta, empty_state %}
+{% from "property/_macros.html" import src_cell %}
+{% block tab_content %}
+  {% if is_overhead %}
+    {% if primary_tiles %}
+      <div class="tiles">{% for t in primary_tiles %}<div class="tile"><div class="label">{{ t.label }}</div><div class="value">{{ t.value }}</div>{% if ctx.compare == 'previous_period' and t.delta is defined %}{{ delta(t.delta, 'vs ' ~ (ctx.compare_display or '')) }}{% endif %}</div>{% endfor %}</div>
+    {% else %}
+      {{ empty_state("No " ~ ctx.display ~ " data for " ~ prop.name, "Add an expense on the Expenses tab to start tracking shared costs.", "Import workbook", url_for('imports.index')) }}
+    {% endif %}
+    {% call section("Monthly cost trend") %}
+      <div class="chart-box" style="height:240px"><canvas id="revenueChart" role="img" aria-label="Revenue by month"></canvas></div>
+    {% endcall %}
+    <script>
+      new Chart(document.getElementById('revenueChart'), {
+        type: 'bar',
+        data: { labels: {{ months_json|safe }}, datasets: [{ label: 'Costs', data: {{ costs_json|safe }}, backgroundColor: FS.costs }] },
+        options: { scales: quietScales(moneyShort), plugins: { legend: { display: false }, tooltip: { callbacks: { label: (i) => `Costs: ${moneyFull(i.parsed.y)}` } } } },
+      });
+    </script>
+  {% elif primary_tiles %}
+    {# One compact line, and only when there is something to say: REVIEW asks for a person; NO CONTROL is information, not a warning. #}
+    {% if attention %}
+      <p class="ws-attn ws-attn-{{ attention.key }}"><i aria-hidden="true">{{ '●' if attention.key == 'review' else '○' }}</i> <strong>{{ 'REVIEW' if attention.key == 'review' else 'NO CONTROL' }}</strong> {{ attention.text }}{% if attention.extra %} <span class="note">+{{ attention.extra }} more</span>{% endif %} <a href="{{ attention.href }}">Open the import ›</a></p>
+    {% endif %}
+
+    <div class="ov2">
+      <section class="ov2-chart" aria-label="Monthly performance">
+        <div class="ov2-head"><h2>{{ 'Booking revenue and fee' if managed else 'Revenue and costs' }}</h2>
+          <span class="chart-key" aria-hidden="true">
+            {% if managed %}<i class="key-gross"></i>Gross Booking Revenue <i class="key-now"></i>Management Fee Earned{% else %}<i class="key-now"></i>Company Revenue <i class="key-cost"></i>Property Costs{% endif %}{% if can_compare %} <i class="key-cmp"></i>{{ 'Previous year' if ctx.compare == 'previous_year' else 'Previous period' }}{% endif %}
+          </span>
+        </div>
+        <div class="chart-box" style="height:250px"><canvas id="wsChart" role="img" aria-label="{{ 'Gross Booking Revenue and Management Fee Earned' if managed else 'Company Revenue and Property Costs' }} by month"></canvas></div>
+      </section>
+
+      <aside class="ov2-side">
+        {% if managed %}
+          <h2>Management fee</h2>
+          <dl class="ov2-rec">
+            <div><dt>Configured</dt><dd>{{ fee_block.configured }}</dd></div>
+            <div><dt>Recorded</dt><dd>{{ fee_block.recorded }}{% if fee_block.estimated %} <span class="note">estimated</span>{% endif %}</dd></div>
+            <div><dt>Workbook check</dt><dd>{% if fee_block.key == 'review' %}<a class="st st-review" href="{{ fee_block.href }}"><i aria-hidden="true">●</i> REVIEW</a>{% elif fee_block.key == 'pass' %}<a class="st st-pass" href="{{ fee_block.href }}"><i aria-hidden="true">✓</i> PASS</a>{% elif fee_block.key == 'nocontrol' %}<a class="st st-nc" href="{{ fee_block.href }}"><i aria-hidden="true">○</i> NO CONTROL</a>{% else %}<span class="st-q">No import</span>{% endif %}</dd></div>
+          </dl>
+          <a class="ov2-more" href="{{ fee_block.fee_href }}">Fee record →</a>
+        {% else %}
+          <h2>Property costs</h2>
+          {% if costs_breakdown.rows %}
+            <ul class="ov2-costs">
+              {% for c in costs_breakdown.rows %}
+                <li><a href="{{ c.href }}"><span class="cl">{{ c.label }}</span><span class="cv">{{ c.amount|money }}</span><span class="cb" aria-hidden="true"><i style="width:{{ c.pct|round(0) }}%"></i></span></a></li>
+              {% endfor %}
+            </ul>
+            <a class="ov2-more" href="{{ cx('properties.expenses_tab', property_id=prop.id) }}">All expenses →</a>
+          {% else %}<p class="note">No costs recorded in this period.</p>{% endif %}
+        {% endif %}
+      </aside>
+    </div>
+
+    {% if recent %}
+    <section class="ov2-recent" aria-label="Recent records">
+      <h2>Recent records</h2>
+      <table class="ws-list">
+        <thead><tr><th>Date</th><th>Type</th><th>Description</th><th class="num">Amount</th><th>Source</th></tr></thead>
+        <tbody>
+          {% for r in recent %}
+            <tr class="clickable" hx-get="{{ r.url }}" hx-target="#drawer" hx-swap="innerHTML">
+              <td>{{ r.date }}</td><td class="muted">{{ r.kind }}</td><td class="truncate">{{ r.text }}</td><td class="num {{ 'neg-text' if r.amount < 0 }}">{{ r.amount|money2 }}</td><td>{{ src_cell(r.src) }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="ov2-links"><a href="{{ cx('properties.bookings', property_id=prop.id) }}">Bookings →</a> <a href="{{ cx('properties.expenses_tab', property_id=prop.id) }}">Expenses →</a></p>
+    </section>
+    {% endif %}
+
+    <script>
+      (function () {
+        const P = {{ pack_json|safe }}, SPAN = {{ span_json|safe }}, SHIFT = {{ shift }}, MANAGED = {{ 'true' if managed else 'false' }}, COMPARE = {{ 'true' if can_compare else 'false' }};
+        const CTX = {{ ctx_params_json|safe }}, EXPENSES = {{ url_for('expenses.index')|tojson }};
+        const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const n = P.months.length, ix = Array.from({ length: n }, (_, i) => i).slice(-12), labels = ix.map(i => P.months[i]);
+        const inSpan = (m) => SPAN.indexOf(m) !== -1;
+        const prim = MANAGED ? P.gross : P.revenue, sec = MANAGED ? P.fee : P.costs.map(v => -v);
+        const GREEN = 'rgba(14,159,110,0.86)', GREEN_DIM = 'rgba(14,159,110,0.28)', GROSS = 'rgba(100,118,110,0.34)', GROSS_DIM = 'rgba(100,118,110,0.16)', COST = 'rgba(194,65,58,0.58)', COST_DIM = 'rgba(194,65,58,0.18)';
+        const line = (color, data) => ({ type: 'line', data, order: 1, borderColor: color, borderDash: [5, 4], borderWidth: 1.4, pointRadius: 2, pointBackgroundColor: '#fcfcfb', pointBorderColor: color, tension: 0, spanGaps: false });
+        const cmp = (arr) => ix.map(i => (i - SHIFT >= 0 ? arr[i - SHIFT] : null));
+        const ds = [
+          { type: 'bar', label: MANAGED ? 'Gross Booking Revenue' : 'Company Revenue', data: ix.map(i => prim[i]), order: 3, grouped: false, barPercentage: 1, categoryPercentage: 0.72,
+            backgroundColor: labels.map(m => inSpan(m) ? (MANAGED ? GROSS : GREEN) : (MANAGED ? GROSS_DIM : GREEN_DIM)) },
+          { type: 'bar', label: MANAGED ? 'Management Fee Earned' : 'Property Costs', data: ix.map(i => sec[i]), order: 2, grouped: false, barPercentage: MANAGED ? 0.5 : 1, categoryPercentage: 0.72,
+            backgroundColor: labels.map(m => inSpan(m) ? (MANAGED ? GREEN : COST) : (MANAGED ? GREEN_DIM : COST_DIM)) },
+        ];
+        if (COMPARE) ds.push(Object.assign({ label: (MANAGED ? 'Management Fee Earned' : 'Company Revenue') + ' (previous)' }, line('rgba(20,32,28,0.55)', cmp(MANAGED ? P.fee : P.revenue))));
+        const chart = new Chart(document.getElementById('wsChart'), {
+          data: { labels, datasets: ds },
+          options: {
+            interaction: { mode: 'index', intersect: false }, layout: { padding: { top: 12, bottom: 2 } }, animation: reduced ? false : { duration: 240 },
+            onHover: (e, els) => { e.native.target.style.cursor = els.length ? 'pointer' : 'default'; },
+            onClick: (e, els, c) => {
+              const hit = c.getElementsAtEventForMode(e, 'nearest', { intersect: true }, true)[0], idx = hit ? hit.index : (els[0] ? els[0].index : null);
+              if (idx === null || idx === undefined) return;
+              const q = new URLSearchParams(Object.assign({}, CTX, { from: labels[idx] + '-01', to: labels[idx] + '-01' }));
+              location.href = location.pathname + '?' + q.toString();
+            },
+            scales: (() => { const sc = quietScales(moneyShort); sc.y.grid = { color: (c) => (c.tick && c.tick.value === 0 ? 'rgba(20,32,28,0.5)' : FS.grid), lineWidth: (c) => (c.tick && c.tick.value === 0 ? 1.25 : 1) }; return sc; })(),
+            plugins: { legend: { display: false }, tooltip: { filter: (i) => i.raw !== null && i.raw !== undefined, itemSort: (a, b) => a.datasetIndex - b.datasetIndex,
+              callbacks: { label: (i) => `${i.dataset.label}: ${moneyFull(!MANAGED && i.datasetIndex === 1 ? Math.abs(i.raw) : i.raw)}` } } },
+          },
+        });
+      })();
+    </script>
+  {% endif %}
+{% endblock %}

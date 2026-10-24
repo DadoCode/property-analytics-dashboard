@@ -1,0 +1,364 @@
+{% extends "base.html" %}
+{% from "_components.html" import delta, mlink, pname, empty_state %}
+{% block title %}{{ ctx.display }} Overview — Fernhill Stays{% endblock %}
+{% block content %}
+  {% set portfolio = not ctx.property_id %}
+  {% set raw_cmp = ctx.compare_display or '' %}
+  {% set compare_label = raw_cmp[:-5] if raw_cmp|length > 5 and raw_cmp[-4:] == (ctx.display or '')[-4:] else raw_cmp %}
+
+  {# ---------- hero: Company Net Profit + where the money went (portfolio scope only) ---------- #}
+  {% if portfolio and hero %}
+  <section class="ov-wrap" aria-label="Company Net Profit and where the money went"><div class="ov-panel">
+    <div class="ov-hero">
+      <div class="ov-eyebrow">Company Net Profit<span class="info-dot" title="Company Revenue minus operated property costs and recorded business costs." tabindex="0" aria-label="Company Revenue minus operated property costs and recorded business costs.">ⓘ</span></div>
+      <div class="ov-net {{ 'is-loss' if flow and flow.loss }}" id="hero-value">{{ hero.value|replace('-', '−') }}</div>
+      {% if ctx.compare == 'previous_period' and hero.delta is not none %}{{ delta(hero.delta, 'vs ' ~ compare_label) }}
+      {% elif ctx.compare == 'previous_year' and hero.delta_ly is not none %}{{ delta(hero.delta_ly, 'vs ' ~ compare_label) }}{% endif %}
+      {% if net_breakdown %}
+        <button type="button" class="ov-link" id="how-btn" aria-expanded="false" aria-controls="net-profit-breakdown">How this is calculated</button>
+        <div class="ov-how" id="net-profit-breakdown" hidden>
+          <p>Company Revenue − Operated Property Costs − Business Costs.</p>
+          <dl>
+            <div><dt><a href="{{ net_breakdown.revenue_href }}">Company Revenue</a></dt><dd>{{ net_breakdown.revenue|money }}</dd></div>
+            <div><dt><a href="{{ net_breakdown.operated_href }}">Operated Property Costs</a></dt><dd>− {{ net_breakdown.operated_costs|money }}</dd></div>
+            <div><dt><a href="{{ net_breakdown.business_href }}">Business Costs</a></dt><dd>− {{ net_breakdown.business_costs|money }}</dd></div>
+            <div class="total"><dt>Net Profit</dt><dd>{{ net_breakdown.net_profit|money }}</dd></div>
+          </dl>
+          <p class="ov-fine">Managed owners' revenue and costs are not included. Based on recorded dashboard data.</p>
+        </div>
+        <button type="button" class="ov-link" data-metric="company_net_profit">Show monthly trend</button>
+      {% endif %}
+      {% if no_data %}<p class="ov-nodata">No data imported for this period. <a href="{{ url_for('imports.index') }}">Import monthly workbook ›</a></p>{% endif %}
+    </div>
+
+    {% if flow %}
+    <div class="ov-flow" id="flow" data-active="net">
+      <svg class="flow-svg" viewBox="0 0 {{ flow.w }} {{ flow.h }}" role="group" aria-label="Money flow: revenue in, costs out, net profit" focusable="false">
+        <defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" class="hatch-bg"/><line x1="0" y1="0" x2="0" y2="6" class="hatch-line"/></pattern></defs>
+        {% for r in flow.ribbons %}<path class="rb rb-{{ r.cls }}" data-key="{{ r.key }}" d="{{ r.d }}"/>{% endfor %}
+        {% for n in flow.nodes %}
+          {% set col = 'L' if n.key in ('ops_rev', 'fees') else ('M' if n.key in ('revenue', 'shortfall') else 'R') %}
+          <g class="fn fn-{{ n.key }}" data-key="{{ n.key }}" tabindex="0" role="button" aria-label="{{ n.label }} {{ n.value }}{{ ', ' ~ n.share ~ ' of Company Revenue' if n.share and n.key not in ('revenue', 'net') else '' }}">
+            <rect class="fn-hit" x="{{ n.x - (150 if col == 'L' else (14 if col == 'M' else 4)) }}" y="{{ n.y - 4 }}" width="{{ 160 if col == 'L' else (n.w + 28 if col == 'M' else 168) }}" height="{{ n.h + 8 }}"/>
+            <rect class="fn-bar" x="{{ n.x }}" y="{{ n.y }}" width="{{ n.w }}" height="{{ n.h }}" rx="2"{% if n.key == 'shortfall' %} fill="url(#hatch)"{% endif %}/>
+            {% if col == 'L' %}
+              <text class="ft-name" x="{{ n.x - 10 }}" y="{{ n.ly - 3 }}" text-anchor="end">{{ n.label }}</text>
+              <text class="ft-val" x="{{ n.x - 10 }}" y="{{ n.ly + 13 }}" text-anchor="end">{{ n.value }}{% if n.share %}<tspan class="ft-share"> · {{ n.share }}</tspan>{% endif %}</text>
+            {% elif col == 'R' %}
+              <text class="ft-name" x="{{ n.x + n.w + 10 }}" y="{{ n.ly - 3 }}">{{ n.label }}</text>
+              <text class="ft-val" x="{{ n.x + n.w + 10 }}" y="{{ n.ly + 13 }}">{{ n.value }}{% if n.share and n.key != 'net' %}<tspan class="ft-share"> · {{ n.share }}</tspan>{% endif %}</text>
+            {% elif n.key == 'revenue' %}
+              <text class="ft-name" x="{{ n.lx }}" y="{{ n.ly - 12 }}" text-anchor="middle">{{ n.label }}</text>
+              <text class="ft-val" x="{{ n.lx }}" y="{{ n.ly + 3 }}" text-anchor="middle">{{ n.value }}</text>
+            {% else %}
+              <text class="ft-name" x="{{ n.x - 10 }}" y="{{ n.y + n.h / 2 + 4 }}" text-anchor="end">{{ n.label }} {{ n.value }}</text>
+            {% endif %}
+          </g>
+        {% endfor %}
+      </svg>
+
+      {# narrow containers: the same flow as two proportional rails #}
+      <div class="flow-rails" aria-label="Money flow, as bars">
+        <div class="rail-title">Revenue in</div>
+        <div class="rail">{% for n in flow.nodes if n.key in ('ops_rev', 'fees', 'shortfall') %}<button type="button" class="seg-r fn fn-{{ n.key }}" data-key="{{ n.key }}" style="flex-basis:{{ n.pct_w }}%" aria-label="{{ n.label }} {{ n.value }}{{ ', ' ~ n.share ~ ' of Company Revenue' if n.share }}"></button>{% endfor %}</div>
+        <div class="rail-legend">{% for n in flow.nodes if n.key in ('ops_rev', 'fees', 'shortfall') %}<span><i class="sw sw-{{ n.key }}"></i>{{ n.label }} {{ n.value }}</span>{% endfor %}</div>
+        <div class="rail-title">Where it went</div>
+        <div class="rail">{% for n in flow.nodes if n.key in ('operated', 'business', 'net') %}<button type="button" class="seg-r fn fn-{{ n.key }}" data-key="{{ n.key }}" style="flex-basis:{{ n.pct_w }}%" aria-label="{{ n.label }} {{ n.value }}"></button>{% endfor %}</div>
+        <div class="rail-legend">{% for n in flow.nodes if n.key in ('operated', 'business', 'net') %}<span><i class="sw sw-{{ n.key }}"></i>{{ n.label }} {{ n.value }}</span>{% endfor %}</div>
+      </div>
+
+      <div class="flow-readout" id="flow-readout" aria-live="polite">
+        <div class="ro-main"><span class="ro-title">{{ flow.detail.net.title }}</span> <span class="ro-value">{{ flow.detail.net.value|replace('-', '−') }}</span></div>
+        <div class="ro-text">{{ flow.detail.net.text }}</div>
+        <div class="ro-links">{% for label, href in flow.detail.net.links %}<a href="{{ href }}">{{ label }} →</a>{% endfor %}</div>
+      </div>
+    </div>
+    {% endif %}
+  </div></section>
+  {% elif no_data %}
+    <p class="nodata-line">No data imported for this period. <a href="{{ url_for('imports.index') }}">Import monthly workbook ›</a></p>
+  {% endif %}
+
+  {# ---------- KPI strip: open figures, and the selector for the one chart below ---------- #}
+  <div class="kpi-strip" role="tablist" aria-label="Metric shown in the chart" id="kpi-strip">
+    {% for t in strip %}
+      <button type="button" class="kpi{{ ' is-on' if loop.first }}" role="tab" id="kpi-{{ t.key }}" data-metric="{{ t.key }}" aria-selected="{{ 'true' if loop.first else 'false' }}" aria-controls="chart-panel" tabindex="{{ 0 if loop.first else -1 }}">
+        <span class="kpi-label">{{ t.label }}{% if t.info %}<span class="info-dot" title="{{ t.info }}" tabindex="0" aria-label="{{ t.info }}">ⓘ</span>{% endif %}</span>
+        <span class="kpi-value">{{ t.value }}</span>
+        <span class="kpi-delta">{% if ctx.compare == 'previous_period' and t.delta is defined %}{{ delta(t.delta, 'vs ' ~ compare_label) }}{% elif ctx.compare == 'previous_year' and t.delta_ly is defined %}{{ delta(t.delta_ly, 'vs ' ~ compare_label) }}{% endif %}</span>
+      </button>
+    {% endfor %}
+  </div>
+
+  {# ---------- the one chart ---------- #}
+  <section class="ov-chart" id="chart-panel" role="tabpanel" aria-labelledby="kpi-{{ strip[0].key if strip else 'revenue' }}">
+    <div class="chart-head">
+      <div><h2 id="chart-title">Company Revenue</h2> <span class="note" id="chart-sub">by month</span></div>
+      <div class="chart-tools">
+        <button type="button" class="chip" id="costs-chip" aria-pressed="true" title="Show or hide the costs alongside this metric"><i class="chip-dot"></i>Costs</button>
+        <span class="chart-key" id="chart-key" aria-hidden="true"></span>
+        <a class="ov-open" id="chart-open" href="{{ drill.revenue }}">Open records →</a>
+        <div class="seg" id="range-seg" role="group" aria-label="Months shown">
+          <button type="button" data-range="6">6M</button>
+          <button type="button" class="on" data-range="12">12M</button>
+          <button type="button" data-range="ytd">YTD</button>
+        </div>
+      </div>
+    </div>
+    <div class="chart-box" style="height:280px"><canvas id="mainChart" role="img" aria-label="Monthly values for the selected metric"></canvas></div>
+  </section>
+
+  {# ---------- costs ---------- #}
+  {% if not no_data and cost_line %}
+  <section class="ov-costs" aria-label="Costs">
+    {% if portfolio and cost_line.business %}
+      {% set op = cost_line.property.operated %}{% set bu = cost_line.business.value %}{% set tot = (op + bu) or 1 %}
+      <div class="cost-items">
+        <a href="{{ net_breakdown.operated_href if net_breakdown else cost_line.property.href }}" class="cost-item" aria-label="Operated Property Costs {{ op|money }}: open the expenses behind it">
+          <span class="ci-label">Operated Property Costs</span><span class="ci-value">{{ op|money }}</span></a>
+        <a href="{{ cost_line.business.href }}" class="cost-item" aria-label="Business Costs {{ bu|money }}: open the expenses behind it">
+          <span class="ci-label">Business Costs</span><span class="ci-value">{{ bu|money }}</span></a>
+      </div>
+      <div class="cost-rail" aria-hidden="true"><i style="flex-basis:{{ (op / tot * 100)|round(1) }}%"></i><i class="b" style="flex-basis:{{ (bu / tot * 100)|round(1) }}%"></i></div>
+      <p class="cost-managed"><a href="{{ cost_line.property.managed_href }}">Managed property costs {{ cost_line.property.managed|money }} ›</a> <span class="note">owners' costs, not part of Net Profit</span></p>
+    {% else %}
+      <div class="cost-items">
+        <a href="{{ cost_line.property.href }}" class="cost-item" aria-label="Costs {{ cost_line.property.value|money }}: open the expenses behind it"><span class="ci-label">Costs</span><span class="ci-value">{{ cost_line.property.value|money }}</span></a>
+      </div>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {# ---------- properties ---------- #}
+  <section class="ov-props" id="properties" aria-label="Properties">
+    <div class="props-head">
+      <h2>Properties</h2>
+      <div class="seg" id="attn-seg" role="group" aria-label="Which properties to list">
+        <button type="button" data-view="attention" aria-pressed="false">Needs attention <span class="count">{{ attention_count }}</span></button>
+        <button type="button" data-view="all" aria-pressed="false">All properties <span class="count">{{ props|length }}</span></button>
+      </div>
+    </div>
+    {% if props %}
+    <table class="ov-table" id="prop-table" data-attention="{{ attention_count }}">
+      <thead><tr><th>Property</th><th>Model</th><th class="num">Revenue / fee</th><th class="num">Profit</th><th class="num">Occupancy</th><th class="num">RevPAR</th><th>Status</th></tr></thead>
+      <tbody>
+        {% for r in props %}
+          <tr data-attn="{{ 1 if r.attention else 0 }}">
+            <td><a href="{{ cx('properties.detail', property_id=r.id) }}" title="{{ r.name }}">{{ pname(r.name) }}</a></td>
+            <td class="muted">{{ r.model }}</td>
+            {% if r.no_data %}
+              <td class="num" colspan="4"><span class="zero" title="Nothing is recorded for this property in this period">—</span></td>
+            {% else %}
+              {% set v = r.fee if r.managed else r.revenue %}
+              <td class="num">{% if v %}{{ mlink(wsurl(ctx, 'properties.bookings', r.id) ~ ('#fees' if r.managed else '#revenue-records'), v|money, ('Management fee record for ' if r.managed else 'Revenue records for ') ~ r.name) }}{% else %}{{ v|money }}{% endif %}{% if r.managed %}<span class="sub"> fee</span>{% endif %}</td>
+              <td class="num">{% if r.managed %}<span class="zero">—</span>{% else %}<span class="{{ 'neg-text' if r.profit < 0 }}">{{ r.profit|money }}</span>{% endif %}</td>
+              <td class="num">{% if r.occupancy %}{{ mlink(wsurl(ctx, 'properties.bookings', r.id) ~ '#booked-nights', '%.0f'|format(r.occupancy * 100) ~ '%', 'Booked nights for ' ~ r.name) }}{% else %}0%{% endif %}</td>
+              <td class="num">{{ r.revpar|money }}</td>
+            {% endif %}
+            <td class="status">
+              {% if r.inactive %}<span class="pill quiet">{{ r.inactive }}</span>
+              {% elif r.reasons %}
+                {% for reason in r.reasons %}{% if reason == 'Review' and r.review %}<a class="pill warn" href="/imports/{{ r.review }}#prop-{{ r.id }}" title="Left in REVIEW by the import. Open the reason.">Review</a>{% else %}<span class="pill {{ 'neg' if reason in ('Negative profit', 'No data') else 'warn' }}">{{ reason }}</span>{% endif %}{% endfor %}
+              {% else %}<span class="muted">OK</span>{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      {{ empty_state("No properties", "Properties with activity in this period appear here.") }}
+    {% endif %}
+  </section>
+
+  <script>
+    const S = {{ series_json|safe }};
+    const SPAN = {{ span_json|safe }};
+    const CTX = {{ ctx_params|tojson }};
+    const ANCHOR = {{ anchor_ym|tojson }};
+    const COMPARE = {{ ctx.compare|tojson }};
+    const EXPENSES = {{ url_for('expenses.index')|tojson }};
+    const DRILL = {{ drill|tojson }};
+    const FLOW = {{ flow_json|safe }};
+    const INFO = {
+      revenue:   { title: 'Company Revenue', sub: 'by month', fmt: 'money', key: 'revenue' },
+      net_profit: { title: 'Property Profit', sub: 'by month', fmt: 'money', key: 'net_profit' },
+      occupancy: { title: 'Occupancy', sub: 'by month', fmt: 'pct', key: 'occupancy' },
+      revpar:    { title: 'RevPAR', sub: 'by month', fmt: 'money', key: 'revpar' },
+      company_net_profit: { title: 'Company Net Profit', sub: 'by month', fmt: 'money', key: 'company_net_profit' },
+    };
+    let metric = {{ (strip[0].key if strip else 'revenue')|tojson }}, range = '12';
+    const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    /* ---------- how it is calculated ---------- */
+    (function () {
+      const btn = document.getElementById('how-btn'), box = document.getElementById('net-profit-breakdown');
+      if (!btn || !box) return;
+      btn.addEventListener('click', () => {
+        const open = box.hidden; box.hidden = !open;
+        btn.setAttribute('aria-expanded', String(open)); btn.textContent = open ? 'Hide calculation' : 'How this is calculated';
+      });
+    })();
+
+    /* ---------- money flow: everything is readable at rest; hover, focus or click a part to read it in the panel below ---------- */
+    (function () {
+      const root = document.getElementById('flow');
+      if (!root || !FLOW) return;
+      const out = document.getElementById('flow-readout');
+      const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      let pinned = 'net', hover = null, leaveTimer = null;
+      const paint = () => {
+        const key = hover || pinned, d = FLOW.detail[key];
+        if (!d || root.dataset.active === key) return;                 // nothing to redraw: the panel never flickers
+        out.innerHTML = '<div class="ro-main"><span class="ro-title">' + esc(d.title) + '</span> <span class="ro-value">' + esc(d.value.replace('-', '\u2212')) + '</span></div>'
+          + '<div class="ro-text">' + esc(d.text) + '</div>'
+          + '<div class="ro-links">' + d.links.map((l) => '<a href="' + esc(l[1]) + '">' + esc(l[0]) + ' \u2192</a>').join('') + '</div>';
+        root.dataset.active = key;
+        // a quiet emphasis on the selected path only; nothing else changes
+        root.querySelectorAll('.rb, .fn').forEach((el) => el.classList.toggle('on', key !== 'net' && key !== 'revenue' && el.dataset.key === key));
+      };
+      const enter = (k) => { clearTimeout(leaveTimer); hover = k; paint(); };
+      const leave = () => { clearTimeout(leaveTimer); leaveTimer = setTimeout(() => { hover = null; paint(); }, 160); };   // moving between parts never flashes the default
+      root.querySelectorAll('.fn, .rb').forEach((el) => {
+        const k = el.dataset.key;
+        el.addEventListener('mouseenter', () => enter(k));
+        el.addEventListener('mouseleave', leave);
+        el.addEventListener('click', () => { pinned = pinned === k && k !== 'net' ? 'net' : k; hover = null; clearTimeout(leaveTimer); paint(); });
+      });
+      root.querySelectorAll('.fn').forEach((el) => {
+        el.addEventListener('focus', () => enter(el.dataset.key));
+        el.addEventListener('blur', leave);
+        el.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.dispatchEvent(new MouseEvent('click', { bubbles: true })); } });   // SVG nodes have no click()
+      });
+      out.addEventListener('mouseenter', () => clearTimeout(leaveTimer));       // reaching for a link in the panel keeps what you were reading
+      out.addEventListener('mouseleave', leave);
+      root.dataset.active = '';
+      paint();
+    })();
+
+    /* ---------- the one chart: the selected metric, with its costs beside it ---------- */
+    const shift = COMPARE === 'previous_year' ? 12 : Math.max(1, SPAN.length);
+    const PORTFOLIO = CTX.property === 'all';
+    function indices() {
+      const n = S.months.length, all = S.months.map((_, i) => i);
+      if (range === '6') return all.slice(Math.max(0, n - 6));
+      if (range === 'ytd') return all.filter(i => S.months[i].slice(0, 4) === ANCHOR.slice(0, 4));
+      return all.slice(Math.max(0, n - 12));
+    }
+    // Which costs go with which metric. Revenue and Property Profit: operated-property costs (the same series the chart always showed).
+    // Net Profit: operated + business costs, the two terms it subtracts. Occupancy and RevPAR have none.
+    const COSTS = {
+      revenue: { key: 'costs', label: PORTFOLIO ? 'Operated Property Costs' : 'Costs' },
+      net_profit: { key: 'costs', label: PORTFOLIO ? 'Operated Property Costs' : 'Costs' },
+      company_net_profit: { key: 'company_costs', label: 'Operated + Business Costs' },
+    };
+    let showCosts = true;
+    const fmtVal = (v, fmt) => v === null || v === undefined ? '\u2014' : (fmt === 'pct' ? pctShort(v) : moneyFull(v));
+    const POS = 'rgba(14,159,110,0.86)', POS_DIM = 'rgba(14,159,110,0.34)', NEG = 'rgba(194,65,58,0.78)', NEG_DIM = 'rgba(194,65,58,0.26)';
+    const COST = 'rgba(194,65,58,0.58)', COST_DIM = 'rgba(194,65,58,0.18)', INK = 'rgba(20,32,28,0.55)', COST_LINE = 'rgba(194,65,58,0.6)';
+    const cmpLine = (color) => ({ type: 'line', data: [], order: 1, borderColor: color, borderDash: [5, 4], borderWidth: 1.4, pointRadius: 2, pointBackgroundColor: '#fcfcfb', pointBorderColor: color, tension: 0, spanGaps: false });
+    const chart = new Chart(document.getElementById('mainChart'), {
+      data: { labels: [], datasets: [
+        { type: 'bar', label: 'This period', data: [], order: 2, backgroundColor: [], grouped: false },
+        { type: 'bar', label: 'Costs', data: [], order: 3, backgroundColor: [], grouped: false },
+        Object.assign({ label: 'Compare' }, cmpLine(INK)),
+        Object.assign({ label: 'Compare costs' }, cmpLine(COST_LINE)),
+      ] },
+      options: {
+        interaction: { mode: 'index', intersect: false },
+        layout: { padding: { top: 14, bottom: 4 } },
+        animation: reduced ? false : { duration: 240 },
+        onHover: (e, els) => { e.native.target.style.cursor = els.length ? 'pointer' : 'default'; },
+        onClick: (e, els, c) => {
+          const hit = c.getElementsAtEventForMode(e, 'nearest', { intersect: true }, true)[0];
+          const idx = hit ? hit.index : (els[0] ? els[0].index : null);
+          if (idx === null || idx === undefined) return;
+          const ym = c.data.labels[idx];
+          const onCosts = hit && hit.datasetIndex === 1 && metric !== 'company_net_profit';
+          const params = new URLSearchParams(Object.assign({}, CTX, { from: ym + '-01', to: ym + '-01' }));
+          // The costs bar is operated-property costs, so it opens exactly that slice of Expenses (a single property is already in the URL).
+          if (onCosts && PORTFOLIO) { params.set('scope', 'property'); params.set('model', 'operated'); }
+          location.href = (onCosts ? EXPENSES : location.pathname) + '?' + params.toString();
+        },
+        scales: (() => {
+          const sc = quietScales(moneyShort);
+          sc.y.grid = { color: (c) => (c.tick && c.tick.value === 0 ? 'rgba(20,32,28,0.5)' : FS.grid), lineWidth: (c) => (c.tick && c.tick.value === 0 ? 1.25 : 1) };   // income above the line, costs below it
+          return sc;
+        })(),
+        plugins: {
+          legend: { display: false },
+          tooltip: { itemSort: (a, b) => a.datasetIndex - b.datasetIndex, filter: (item) => item.raw !== null && item.raw !== undefined, callbacks: {
+            label: (item) => `${item.dataset.label}: ${fmtVal(item.datasetIndex === 1 || item.datasetIndex === 3 ? Math.abs(item.raw) : item.raw, INFO[metric].fmt)}`,
+          } },
+        },
+      },
+    });
+    function apply() {
+      const info = INFO[metric], ix = indices(), series = S[info.key] || [];
+      const costs = showCosts && COSTS[metric] ? COSTS[metric] : null, cseries = costs ? (S[costs.key] || []) : [];
+      const labels = ix.map(i => S.months[i]);
+      const vals = ix.map(i => series[i]);
+      const inSpan = (ym) => SPAN.indexOf(ym) !== -1;
+      const ds = chart.data.datasets, cmp = COMPARE !== 'none';
+      chart.data.labels = labels;
+      ds[0].label = info.title; ds[0].data = vals;
+      ds[0].backgroundColor = labels.map((ym, k) => (vals[k] < 0 ? (inSpan(ym) ? NEG : NEG_DIM) : (inSpan(ym) ? POS : POS_DIM)));
+      ds[1].label = costs ? costs.label : 'Costs'; ds[1].data = costs ? ix.map(i => -cseries[i]) : [];        // plotted below zero; the numbers are unchanged
+      ds[1].backgroundColor = labels.map((ym) => (inSpan(ym) ? COST : COST_DIM));
+      ds[1].hoverBackgroundColor = 'rgba(194,65,58,0.8)';
+      // Revenue is the dominant bar. A profit metric (it can itself be negative) is drawn as a slimmer bar inside the wider costs bar.
+      const slim = costs && (metric === 'net_profit' || metric === 'company_net_profit');
+      ds[0].barPercentage = slim ? 0.5 : 1; ds[0].categoryPercentage = 0.72; ds[1].barPercentage = 1; ds[1].categoryPercentage = 0.72;
+      const cmpName = COMPARE === 'previous_year' ? 'previous year' : 'previous period';
+      ds[2].label = info.title + ' (' + cmpName + ')'; ds[2].data = cmp ? ix.map(i => (i - shift >= 0 ? series[i - shift] : null)) : [];
+      ds[3].label = (costs ? costs.label : 'Costs') + ' (' + cmpName + ')'; ds[3].data = cmp && costs ? ix.map(i => (i - shift >= 0 ? -cseries[i - shift] : null)) : [];
+      chart.options.scales.y.ticks.callback = info.fmt === 'pct' ? (v) => pctShort(v) : moneyShort;
+      chart.options.scales.y.min = info.fmt === 'pct' ? 0 : undefined; chart.options.scales.y.max = info.fmt === 'pct' ? 100 : undefined;      // a percentage is read against 0-100%
+      chart.update();
+      document.getElementById('chart-title').textContent = info.title;
+      document.getElementById('chart-sub').textContent = costs ? 'with ' + costs.label.toLowerCase() + ', by month' : info.sub;
+      const chip = document.getElementById('costs-chip');
+      chip.hidden = !COSTS[metric]; chip.setAttribute('aria-pressed', String(showCosts));
+      document.getElementById('chart-key').innerHTML = '<i class="key-now"></i>' + esc2(info.title) + (costs ? ' <i class="key-cost"></i>' + esc2(costs.label) : '')
+        + (cmp ? ' <i class="key-cmp"></i>' + (COMPARE === 'previous_year' ? 'Previous year' : 'Previous period') : '');
+      const open = document.getElementById('chart-open');
+      const href = metric === 'company_net_profit' ? (DRILL.company_net_profit || DRILL.revenue) : DRILL[metric];
+      if (href && href.charAt(0) !== '#') { open.href = href; open.hidden = false; } else { open.hidden = true; }
+      document.querySelectorAll('#kpi-strip .kpi').forEach((b) => {
+        const on = b.dataset.metric === metric;
+        b.classList.toggle('is-on', on); b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1;
+      });
+    }
+    function esc2(t) { return String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+    function select(m) { if (!INFO[m] || !(S[INFO[m].key] || []).length) return; metric = m; apply(); }
+    document.getElementById('costs-chip').addEventListener('click', () => { showCosts = !showCosts; apply(); });
+    document.querySelectorAll('#kpi-strip .kpi').forEach((b, i, all) => {
+      b.addEventListener('click', () => select(b.dataset.metric));
+      b.addEventListener('keydown', (e) => {
+        const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+        if (!step) return;
+        e.preventDefault(); const nxt = all[(i + step + all.length) % all.length]; nxt.focus(); select(nxt.dataset.metric);
+      });
+    });
+    document.querySelectorAll('[data-metric="company_net_profit"]').forEach((b) => b.addEventListener('click', () => {
+      select('company_net_profit'); document.getElementById('chart-panel').scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'center' });
+    }));
+    document.querySelectorAll('#range-seg button').forEach(b => b.addEventListener('click', () => {
+      range = b.dataset.range;
+      document.querySelectorAll('#range-seg button').forEach(x => x.classList.toggle('on', x === b));
+      apply();
+    }));
+    apply();
+
+    /* ---------- needs attention / all properties ---------- */
+    (function () {
+      const table = document.getElementById('prop-table'); if (!table) return;
+      const btns = document.querySelectorAll('#attn-seg button');
+      const view = (v) => {
+        table.querySelectorAll('tbody tr').forEach((tr) => { tr.hidden = v === 'attention' && tr.dataset.attn !== '1'; });
+        btns.forEach((b) => { const on = b.dataset.view === v; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+      };
+      btns.forEach((b) => b.addEventListener('click', () => view(b.dataset.view)));
+      view(+table.dataset.attention > 0 ? 'attention' : 'all');
+    })();
+  </script>
+{% endblock %}

@@ -1,0 +1,52 @@
+{% extends "property/_shell.html" %}
+{% from "_components.html" import section, empty_state %}
+{% block tab_content %}
+  {% call section(health_title_text, "Where the figures for this period come from") %}
+    <div class="card">
+      {% set upload_mode = 'inline' %}
+      {% include "partials/health_panel.html" %}
+    </div>
+  {% endcall %}
+
+  <span id="upload"></span>
+  {% call section("Upload a supporting document (optional)") %}
+  <div class="card">
+    <p class="note mt0">Amazon/Temu orders, cleaning invoices, booking-platform statements, bank statements, receipts — PDF or photo. Documents are supporting evidence only: keeping one never adds anything to this property's figures, which come from the monthly workbook.
+      {% if not extraction_available %}Spreadsheets and CSV files are read automatically. PDFs and photos need automatic extraction, which isn't configured; they are still kept as evidence.{% else %}Claude will pull out the line items so you can check them against the source.{% endif %} Up to {{ max_upload_mb }} MB per file.</p>
+    <form class="upload-form" method="post" action="{{ url_for('documents.upload_property', property_id=prop.id) }}" enctype="multipart/form-data">
+      <input type="file" name="document" aria-label="File to keep as evidence" required>
+      <select name="doc_type" aria-label="Document type">
+        <option value="amazon_order" {{ 'selected' if prefill_type == 'amazon_order' }}>Amazon / Temu order</option>
+        <option value="cleaning_invoice" {{ 'selected' if prefill_type == 'cleaning_invoice' }}>Cleaning invoice</option>
+        <option value="booking_statement" {{ 'selected' if prefill_type == 'booking_statement' }}>Booking / Airbnb statement</option>
+        <option value="bank_statement" {{ 'selected' if prefill_type == 'bank_statement' }}>Bank statement</option>
+        <option value="utility_bill" {{ 'selected' if prefill_type == 'utility_bill' }}>Utility bill</option>
+        <option value="other" {{ 'selected' if prefill_type == 'other' }}>Other</option>
+      </select>
+      <button type="submit">Upload</button>
+    </form>
+  </div>
+  {% endcall %}
+
+  {% call section("Documents on file") %}
+  <div class="card">
+    {% if documents %}
+      <ul class="doc-list">
+        {% for d in documents %}
+          <li>
+            <span>{{ d.filename }} <span class="note">({{ d.doc_type }}, {{ d.uploaded_at }}) · Kept as evidence</span></span>
+            <span>
+              {% if d.status == 'confirmed' %}<span class="pill pos">Reviewed</span>
+              {% elif d.status == 'failed' %}<span class="pill warn" title="Couldn't read automatically">Needs review</span>
+              {% else %}<span class="pill warn">Needs review</span>{% endif %}
+              {% if d.status != 'confirmed' %}<a href="{{ url_for('documents.review', doc_id=d.id) }}">Review</a>{% endif %}
+            </span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      {{ empty_state("No documents for " ~ prop.name, "Documents are supporting evidence for this property. Its monthly figures come from the monthly workbook.") }}
+    {% endif %}
+  </div>
+  {% endcall %}
+{% endblock %}

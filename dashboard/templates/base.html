@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Fernhill Stays — Dashboard{% endblock %}</title>
+  <script>try { if (localStorage.getItem('dash_sidebar') === 'collapsed') document.documentElement.dataset.sidebar = 'collapsed'; } catch (e) {}</script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v=asset_v) }}">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="{{ url_for('static', filename='charts.js', v=asset_v) }}"></script>
+  <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.3/dist/htmx.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.3/dist/cdn.min.js"></script>
+  <script defer src="{{ url_for('static', filename='ui.js', v=asset_v) }}"></script>
+</head>
+{% from "_components.html" import icon %}
+<body class="{% block body_class %}{% endblock %}{{ ' viewer' if role == 'viewer' }}"{% if demo_mode %} data-demo="1" data-demo-message="{{ demo_message }}"{% endif %}>
+  <div id="navbar"></div>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="mark">FS</div>
+        <div class="brand-text">
+          <div class="name">Fernhill</div>
+          <div class="sub">Stays</div>
+        </div>
+        <button type="button" class="sb-toggle" id="sb-toggle" aria-label="Collapse sidebar" aria-expanded="true" title="Collapse sidebar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m14.5 6-6 6 6 6"/></svg></button>
+      </div>
+
+      <button type="button" id="palette-open" class="jump-btn" aria-label="Search and jump to a page or property" data-tip="Search  ⌘K">{{ icon("search") }}<span class="lbl">Search</span><kbd>⌘K</kbd></button>
+
+      <nav class="primary">
+        <a href="{{ url_for('overview.index') }}{{ nav_qs }}" data-tip="Overview" class="nav-link {{ 'active' if active == 'overview' else '' }}">{{ icon("overview") }}<span class="lbl">Overview</span></a>
+        <a href="{{ url_for('properties.index') }}{{ nav_qs }}" data-tip="Properties" class="nav-link {{ 'active' if active == 'properties' else '' }}">{{ icon("properties") }}<span class="lbl">Properties</span></a>
+        {% if active == 'properties' and recently_viewed %}
+          <div class="section-label" style="padding:6px 10px 2px 31px">Recently viewed</div>
+          {% for p in recently_viewed %}
+            <a href="{{ url_for('properties.detail', property_id=p.id) }}{{ nav_qs }}" class="nav-link recent {{ 'active' if active_property == p.id else '' }}" title="{{ p.name }}"><span aria-hidden="true">{{ p.name|short }}</span><span class="vh">{{ p.name }}</span></a>
+          {% endfor %}
+        {% endif %}
+        <a href="{{ url_for('bookings.index') }}{{ nav_qs }}" data-tip="Bookings" class="nav-link {{ 'active' if active == 'bookings' else '' }}">{{ icon("bookings") }}<span class="lbl">Bookings</span></a>
+        <a href="{{ url_for('expenses.index') }}{{ nav_qs }}" data-tip="Expenses" class="nav-link {{ 'active' if active == 'expenses' else '' }}">{{ icon("expenses") }}<span class="lbl">Expenses</span></a>
+        <a href="{{ url_for('documents.index') }}" data-tip="Documents" class="nav-link {{ 'active' if active == 'documents' else '' }}">{{ icon("documents") }}<span class="lbl">Documents</span></a>
+        {# Inside a property workspace, Reports/Targets should default to
+           that property rather than losing it -- nav_qs deliberately never
+           carries "property" here (see services/context.py), so these two
+           links carry it explicitly instead. Every other link keeps
+           today's behaviour. #}
+        <a href="{{ cx('reports.index', property=fixed_property.id) if fixed_property else (url_for('reports.index') ~ nav_qs) }}" data-tip="Reports" class="nav-link {{ 'active' if active == 'reports' else '' }}">{{ icon("reports") }}<span class="lbl">Reports</span></a>
+        <a href="{{ cx('targets.index', property=fixed_property.id) if fixed_property else (url_for('targets.index') ~ nav_qs) }}" data-tip="Targets" class="nav-link {{ 'active' if active == 'targets' else '' }}">{{ icon("targets") }}<span class="lbl">Targets</span></a>
+      </nav>
+
+      {% if auth_on %}<a href="{{ url_for('auth.logout') }}" class="signout">{{ (current_user ~ ' (view only)') if role == 'viewer' else ('Signed in as ' ~ (current_user or 'owner')) }} · Sign out</a>{% endif %}
+      <button type="button" class="add-btn" onclick="document.getElementById('add-apartment-dialog').showModal()" aria-label="Add property" data-tip="Add property">{{ icon("plus") }}<span class="lbl">Add property</span></button>
+    </aside>
+
+    <div class="main-col">
+      <main>
+        {% if role == 'viewer' %}<div class="viewer-note">You're viewing in read-only mode. Everything is live, but nothing can be changed from this account.</div>{% endif %}
+        {% if demo_mode %}<div class="viewer-note">{{ demo_banner }}</div>{% endif %}
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% for category, m in messages %}<div class="flash {{ category if category in ('success', 'warning', 'error', 'info') else 'info' }}" role="status">{{ m }}</div>{% endfor %}
+        {% endwith %}
+
+        {% if context_bar %}{% include "partials/context_bar.html" %}{% endif %}
+
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
+
+  <div id="palette" class="palette" hidden role="dialog" aria-modal="true" aria-label="Search and jump">
+    <div class="palette-box">
+      <div class="palette-top">{{ icon("search") }}<input id="palette-input" type="text" placeholder="Search pages, properties, imports…" autocomplete="off" aria-label="Search"></div>
+      <div id="palette-list"></div>
+      <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd>navigate</span><span><kbd>↵</kbd>open</span><span><kbd>esc</kbd>close</span></div>
+    </div>
+  </div>
+  <script id="palette-data" type="application/json">[
+    {"label": "Overview", "hint": "Page", "url": {{ url_for('overview.index')|tojson }}},
+    {"label": "Properties", "hint": "Page", "url": {{ url_for('properties.index')|tojson }}},
+    {"label": "Bookings", "hint": "Page", "url": {{ url_for('bookings.index')|tojson }}},
+    {"label": "Booking calendar", "hint": "Bookings", "url": {{ url_for('bookings.calendar_tab')|tojson }}},
+    {"label": "Occupancy performance", "hint": "Bookings", "url": {{ url_for('bookings.performance')|tojson }}},
+    {"label": "Expenses", "hint": "Page", "url": {{ url_for('expenses.index')|tojson }}},
+    {"label": "Import monthly workbook", "hint": "Imports", "url": {{ url_for('imports.index')|tojson }}},
+    {"label": "Imports history", "hint": "Imports", "url": {{ url_for('imports.index')|tojson }}},
+    {"label": "Documents", "hint": "Page", "url": {{ url_for('documents.index')|tojson }}},
+    {"label": "Documents needing review", "hint": "Documents", "url": {{ url_for('documents.index', d_status='review')|tojson }}},
+    {"label": "Reports", "hint": "Page", "url": {{ url_for('reports.index')|tojson }}},
+    {"label": "Targets", "hint": "Page", "url": {{ url_for('targets.index')|tojson }}}{% for p in all_properties %},
+    {"label": {{ p.name|tojson }}, "hint": "Property", "url": {{ url_for('properties.detail', property_id=p.id)|tojson }}}{% endfor %}
+  ]</script>
+
+  <div id="drawer-backdrop" class="drawer-backdrop" onclick="closeDrawer()"></div>
+  <div id="drawer" class="drawer"></div>
+
+  <div id="upload-overlay" class="upload-overlay">
+    <div class="upload-overlay-box">
+      <div class="upload-spinner"></div>
+      <div id="upload-overlay-stage" class="upload-overlay-stage">Uploading…</div>
+      <div class="upload-overlay-note">This can take a moment for larger files or photos — don't close this tab.</div>
+    </div>
+  </div>
+
+  <dialog id="add-apartment-dialog">
+    <form method="post" action="{{ url_for('properties.add') }}" id="add-property-form">
+      <h2>Add a property</h2>
+      <label>Name <input type="text" name="name" placeholder="e.g. Flat 12, Marlowe House" required></label>
+      <label>Address <input type="text" name="address" placeholder="optional, defaults to the name"></label>
+      <label>How is it run?
+        <select name="model" required aria-describedby="model-help">
+          <option value="" selected disabled>Choose…</option>
+          <option value="operated">Operated: The company keeps the booking revenue and pays the property costs</option>
+          <option value="managed">Managed: The company earns a management fee</option>
+        </select>
+      </label>
+      <p class="note mt0" id="model-help">Operated and Managed are reported differently, so choose carefully. A managed property's guest revenue mostly belongs to its owner.</p>
+      <label id="add-fee-row" hidden>Management fee (% of its booking revenue)
+        <input type="number" name="fee" min="0.1" max="100" step="0.1" placeholder="e.g. 15">
+        <span class="note">The company earns this percentage as its fee, not the full guest revenue.</span>
+      </label>
+      <label>Start date <span class="note">optional, leave empty if unknown</span> <input type="date" name="start_date"></label>
+      <label>Status
+        <select name="status"><option value="active" selected>Active</option><option value="inactive">Inactive</option></select>
+      </label>
+      <div class="dialog-actions">
+        <button type="button" class="secondary" onclick="document.getElementById('add-apartment-dialog').close()">Cancel</button>
+        <button type="submit">Add property</button>
+      </div>
+    </form>
+    <script>
+      (function () {
+        var f = document.getElementById('add-property-form'), m = f.elements.model, row = document.getElementById('add-fee-row'), fee = f.elements.fee;
+        m.addEventListener('change', function () { var managed = m.value === 'managed'; row.hidden = !managed; fee.required = managed; if (!managed) fee.value = ''; });
+      })();
+    </script>
+  </dialog>
+</body>
+</html>

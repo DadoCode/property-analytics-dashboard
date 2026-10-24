@@ -1,0 +1,46 @@
+{% from "_components.html" import channel %}
+{% if b.reservation_id == 'monthly-aggregate' %}
+<div class="drawer-head">
+  <div>
+    <div class="drawer-amount">{{ b.nights }} booked nights</div>
+    <div class="note">Monthly total · {{ b.property_name }}</div>
+  </div>
+  <button type="button" class="drawer-close" onclick="closeDrawer()" aria-label="Close">&times;</button>
+</div>
+<p class="note" style="margin-top:14px"><strong>This is a monthly total, not an individual reservation.</strong> It is the month's total as recorded. {% if b.net_revenue %}It carries <strong>{{ b.net_revenue|money2 }}</strong> of revenue for the month.{% else %}Revenue for the month is held as booking-income rows (see Revenue records).{% endif %}</p>
+<div class="drawer-section">
+  <div class="drawer-field"><span>Property</span><strong>{{ b.property_name }}</strong></div>
+  <div class="drawer-field"><span>Counted from</span><strong>{{ b.check_in }}</strong></div>
+  <div class="drawer-field"><span>to</span><strong>{{ b.check_out }}</strong></div>
+</div>
+<div class="drawer-section src">
+  {% include 'partials/provenance.html' %}
+</div>
+{% else %}
+<div class="drawer-head">
+  <div>
+    <div class="drawer-amount">{{ b.net_revenue|money2 }}</div>
+    <div class="note">Reservation record · {{ channel(b.platform) }} · {{ b.property_name }}</div>
+  </div>
+  <button type="button" class="drawer-close" onclick="closeDrawer()" aria-label="Close">&times;</button>
+</div>
+
+<div class="drawer-section">
+  <div class="drawer-field"><span>Property</span><a href="{{ cx('properties.bookings', property_id=b.property_id) }}">{{ b.property_name }}</a></div>
+  <div class="drawer-field"><span>Check-in</span><strong>{{ b.check_in }}</strong></div>
+  <div class="drawer-field"><span>Check-out</span><strong>{{ b.check_out }}</strong></div>
+  <div class="drawer-field"><span>Nights</span><strong>{{ b.nights }}</strong></div>
+  {% if b.reservation_id and b.reservation_id != 'monthly-aggregate' %}<div class="drawer-field"><span>Reservation ID</span><strong>{{ b.reservation_id }}</strong></div>{% endif %}
+</div>
+
+<div class="drawer-section">
+  <div class="drawer-field"><span>Guest total (gross)</span><strong>{{ b.gross_revenue|money2 if b.gross_revenue is not none else '—' }}</strong></div>
+  <div class="drawer-field"><span>Platform fees</span><strong>{{ b.platform_fees|money2 if b.platform_fees is not none else '—' }}</strong></div>
+  <div class="drawer-field"><span>You receive (net)</span><strong>{{ b.net_revenue|money2 }}</strong></div>
+  {% if b.nights %}<div class="drawer-field"><span>Per night</span><strong>{{ (b.net_revenue / b.nights)|money2 }}</strong></div>{% endif %}
+</div>
+
+<div class="drawer-section src">
+  {% include 'partials/provenance.html' %}
+</div>
+{% endif %}

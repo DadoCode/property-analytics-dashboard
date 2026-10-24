@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% from "_components.html" import empty_state %}
+{% from "_import_macros.html" import status_legend, flow %}
+{% block title %}Import monthly workbook — Fernhill Stays{% endblock %}
+{% block content %}
+  {{ flow('upload') }}
+  <header class="imp-head">
+    <h1>Import monthly workbook</h1>
+    <p class="imp-sub">Upload the workbook prepared from your source documents. It is checked, you review exactly what would change for the month, and only then is it imported. Any import can be undone.</p>
+  </header>
+  <p class="imp-back" style="margin-top:var(--s2)"><a href="{{ url_for('documents.index') }}">&larr; Documents</a>{% if recon_total %} · <a href="{{ url_for('reconcile.index') }}">Excel vs booking statements</a>{% endif %}</p>
+
+  <section class="imp-upload">
+    {% if demo_mode %}
+      <div class="empty" style="padding:var(--s4)"><div class="empty-title">Imports are off in this demo</div><div class="empty-body" style="margin-bottom:0">{{ demo_message }}</div></div>
+    {% else %}
+      <form method="post" action="{{ url_for('imports.upload') }}" enctype="multipart/form-data" class="filter-bar m0">
+        <input type="file" name="workbook" accept=".xlsx,.xlsm" required aria-label="Monthly workbook (.xlsx)">
+        <button type="submit">Check workbook</button>
+      </form>
+      <p class="note m-t3">One Excel workbook in the standard monthly layout. Only the sheets this importer knows are read; a sheet holding logins is excluded by name and never opened. The file itself is not kept — only the figures read from it, so a batch can be reviewed and undone.</p>
+    {% endif %}
+  </section>
+
+  <p class="note mt3">If a workbook-controlled figure is wrong, correct the workbook and re-import the month.</p>
+  {{ status_legend() }}
+
+  <h2 class="imp-h2" style="margin-top:var(--s6)">Import history</h2>
+  <nav class="tabs" aria-label="Filter the history">
+    <a href="?" class="tab {{ 'active' if not f_status }}">All</a>
+    <a href="?status=applied" class="tab {{ 'active' if f_status == 'applied' }}">Applied</a>
+    <a href="?status=staged" class="tab {{ 'active' if f_status == 'staged' }}">Not imported yet</a>
+    <a href="?status=undone" class="tab {{ 'active' if f_status == 'undone' }}">Undone</a>
+  </nav>
+  <div class="pr-surface imp-hist">
+    {% if batches %}
+      {% macro sort_link(key, label) %}<a class="sort {{ 'on' if sort == key }}" href="?status={{ f_status }}&sort={{ key }}&dir={{ 'asc' if (sort == key and direction == 'desc') else 'desc' }}">{{ label }}{% if sort == key %} {{ '↑' if direction == 'asc' else '↓' }}{% endif %}</a>{% endmacro %}
+      <table class="imp-hist-table">
+        <thead><tr><th>{{ sort_link('period', 'Month') }}</th><th>Workbook</th><th>{{ sort_link('uploaded', 'Applied') }}</th><th>Batch</th><th class="num">Changes</th><th>{{ sort_link('status', 'State') }}</th><th><span class="vh">Open</span></th></tr></thead>
+        <tbody>
+          {% for b in batches %}
+            <tr>
+              <td class="nw"><strong>{{ b.period_label }}</strong></td>
+              <td title="{{ b.filename }}"><div class="file-label">{{ b.file_label }}</div><div class="note">{{ b.property_names|length }} area{{ 's' if b.property_names|length != 1 }}{% if b.property_names %} · {{ b.property_names[:2]|join(', ') }}{% if b.property_names|length > 2 %}, +{{ b.property_names|length - 2 }}{% endif %}{% endif %}</div></td>
+              <td class="note nw">{{ (b.applied_at or b.uploaded_at)[:10] }}{% if not b.applied_at %}<span class="vh"> (uploaded)</span>{% endif %}</td>
+              <td class="note nw">#{{ b.id }} · {{ b.kind_label }}</td>
+              <td class="num">{{ b.row_count }} change{{ 's' if b.row_count != 1 }}</td>
+              <td class="nw">{% if b.status == 'applied' %}<span class="st st-pass"><i aria-hidden="true">✓</i> Applied</span>{% elif b.status == 'staged' %}<span class="st-q">Not imported yet</span>{% elif b.status == 'undone' %}<span class="st-q">Undone</span>{% else %}<span class="st-q">{{ b.status }}</span>{% endif %}</td>
+              <td class="num"><a class="imp-open" href="{{ url_for('imports.batch', batch_id=b.id) }}" aria-label="{{ 'Review' if b.status == 'staged' else 'Open' }} import #{{ b.id }}, {{ b.period_label }}">{{ 'Review' if b.status == 'staged' else 'Open' }} ›</a></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      {{ empty_state("No imports yet", "Upload the monthly workbook above to preview your first import.") }}
+    {% endif %}
+  </div>
+{% endblock %}

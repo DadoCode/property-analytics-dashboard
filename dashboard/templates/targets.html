@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% from "_components.html" import pname, empty_state %}
+{% block title %}Targets — Fernhill Stays{% endblock %}
+{% macro menu(spec) -%}
+  {% set label, aria, active, options = spec %}
+  <details class="pr-menu"><summary aria-label="{{ aria }}">{{ active or label }}<span class="caret">▾</span></summary>
+    <div class="pr-pop tg-pop">{% for text, href, sel in options %}<a href="{{ href }}" class="{{ 'sel' if sel }}">{{ text }}</a>{% endfor %}</div></details>
+{%- endmacro %}
+{# actual = solid bar, reference = faint ghost with a marker. A saved target reads as a target (and is scored); a recorded average reads as a
+   neutral benchmark (dashed marker, no status colour). No bar at all when a bar would mislead (no positive reference). #}
+{% macro tbar(x, status, mode, ref) -%}
+  {% if x.bar %}<span class="tg-bar tg-{{ status }} {{ 'tg-bench' if mode == 'benchmark' }}" role="img" aria-label="{{ x.actual_text }} actual against {{ 'its recorded average of ' ~ ref if mode == 'benchmark' else 'a ' ~ ref ~ ' target' }}"><i class="tg-t" style="width:{{ x.bar.ghost }}%"></i><i class="tg-a" style="width:{{ x.bar.solid }}%"></i></span>
+  {% else %}<span class="tg-bar tg-none" aria-hidden="true"></span>{% endif %}
+{%- endmacro %}
+{% block content %}
+  <div class="tg">
+
+  <section class="pr-surface tg-sum" aria-label="Portfolio targets">
+    <div class="tg-items">
+      {% for it in summary if not (it.empty and viewing) %}
+        <div class="tg-item {{ 'tg-owner' if it.owner_side }}">
+          <div class="tg-label">{{ it.label }}{% if it.hint %}<span class="info-dot" title="{{ it.hint }}" tabindex="0" aria-label="{{ it.hint }}">ⓘ</span>{% endif %}</div>
+          {% if it.empty %}
+            <div class="tg-big tg-nil">—</div>
+            <div class="tg-cap">{{ it.caption }}</div>
+          {% else %}
+            <div class="tg-big">{{ it.actual_text }}<span class="tg-of"> / {{ it.ref_text }}</span>{% if it.mode == 'benchmark' %}<span class="tg-src">recorded avg</span>{% endif %}</div>
+            {{ tbar(it, it.status, it.mode, it.ref_text) }}
+            {% if it.mode == 'benchmark' %}
+              <div class="tg-var tg-s-benchmark"><b>{{ it.diff_main }}</b> <span>{{ it.diff_sub }}</span></div>
+            {% else %}
+              <div class="tg-var tg-s-{{ it.status }}"><b>{{ it.variance_text }}</b> <span>{{ it.status_text }}</span></div>
+            {% endif %}
+            <div class="tg-cap">{{ it.caption }}</div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+    {% if benchmarks_only %}<p class="tg-note tg-bench-note">No targets set · recorded averages are shown as benchmarks.</p>{% endif %}
+    <p class="tg-note">No target is set for Company Revenue, Management Fee Earned, Business Costs or Company Net Profit.</p>
+  </section>
+
+  <div class="pr-bar tg-bar2">
+    {% for m in menus %}{{ menu(m) }}{% endfor %}
+    <details class="pr-menu tg-edit"><summary aria-label="Edit targets">Edit targets<span class="caret">▾</span></summary>
+      <div class="pr-pop tg-pop tg-pop-r">
+        {% for e in edit_links %}<a href="#" hx-get="{{ e.href }}" hx-target="#drawer" hx-swap="innerHTML" title="{{ e.name }}">{{ pname(e.name, true) }}</a>{% endfor %}
+        {% if any_saved %}
+          <form method="post" action="{{ url_for('targets.reset') }}" onsubmit="return confirm('Clear every target you set? Recorded averages will be shown as benchmarks.')">
+            <input type="hidden" name="basis" value="{{ basis }}"><input type="hidden" name="month" value="{{ month }}">
+            <button type="submit" class="tg-reset">Clear all set targets</button>
+          </form>
+        {% endif %}
+      </div>
+    </details>
+  </div>
+  {% if chips %}
+    <div class="pr-chips" aria-label="Active filters">
+      {% for c in chips %}<a class="chip-x" href="{{ c.href }}" aria-label="Remove filter {{ c.label }}">{{ c.label }} <i aria-hidden="true">×</i></a>{% endfor %}
+      <a class="chip-reset" href="{{ U(status=None) }}">Reset</a>
+    </div>
+  {% endif %}
+
+  <div class="pr-surface tg-surface">
+    {% if groups %}
+      {% for g in groups %}
+        <section class="tg-group" aria-label="{{ g.label }} properties">
+          <h2 class="tg-gh"><span class="g-name">{{ g.label }}</span><span class="g-meta">{{ g.n }}</span></h2>
+          {% if g.model == 'managed' %}<p class="tg-gnote">Gross Booking Revenue mostly belongs to the owner and is not company revenue. The company's own income here is Management Fee Earned, which has no target.</p>{% endif %}
+          {% for b in g.blocks %}
+            <div class="tg-prop" id="target-{{ b.id }}">
+              <div class="tg-prophead"><span class="tg-pname" title="{{ b.name }}">{{ pname(b.name, true) }}</span>
+                <a class="t-perf tg-perf" href="{{ perf(b.id) }}" aria-label="Open Performance for {{ b.name }}, {{ month_label }}">Performance</a></div>
+              {% if b.inactive %}
+                <p class="tg-inactive">{{ b.inactive }}</p>
+              {% else %}
+                {% for r in b.rows %}
+                  <button type="button" class="tg-row tg-s-{{ r.status }}" hx-get="{{ inspect(b.id, r.key) }}" hx-target="#drawer" hx-swap="innerHTML">
+                    <span class="tg-metric"><span class="vh">{{ b.name }}: </span>{{ r.label }}{% if r.owner_side %}<span class="tg-tag">owner-side</span>{% endif %}</span>
+                    <span class="tg-val"><span class="vh">Actual </span><b>{{ r.actual_text }}</b>{% if r.mode == 'target' %}<span class="tg-of"><span class="vh"> target</span> / {{ r.target_text }}</span><span class="tg-src" title="Set by you">set by you</span>{% elif r.mode == 'benchmark' %}<span class="tg-of"><span class="vh"> recorded average</span> / {{ r.benchmark_text }}</span><span class="tg-src" title="{{ r.source_detail }}">recorded avg</span>{% endif %}</span>
+                    <span class="tg-cell">{% if r.mode == 'target' %}{{ tbar(r, r.status, 'target', r.target_text) }}{% elif r.mode == 'benchmark' %}{{ tbar(r, r.status, 'benchmark', r.benchmark_text) }}{% else %}<span class="tg-miss">No target set</span>{% endif %}</span>
+                    <span class="tg-vv">{% if r.mode == 'target' and r.variance_text %}<span class="vh">Variance </span><b>{{ r.variance_text }}</b><small>{{ r.status_text }}</small>{% elif r.mode == 'benchmark' and r.diff_main %}<span class="vh">Difference </span><b>{{ r.diff_main }}</b><small>{{ r.diff_sub }}</small>{% elif r.note %}<small>{{ r.note }}</small>{% else %}<small class="vh">No variance</small>{% endif %}</span>
+                    <span class="tg-trend">{% if r.trend %}<span class="vh">Trend </span>{{ r.trend.arrow }} {{ r.trend.text }}{% else %}<span aria-label="No trend">—</span>{% endif %}</span>
+                  </button>
+                {% endfor %}
+              {% endif %}
+            </div>
+          {% else %}
+            <p class="tg-none">No {{ g.label|lower }} properties match.</p>
+          {% endfor %}
+        </section>
+      {% endfor %}
+    {% elif n_blocks %}
+      {{ empty_state("Nothing matches", "No property has a metric with this status. Remove the filter to see them all.") }}
+    {% else %}
+      {{ empty_state("No properties to set targets for", "Add a property and record some months of revenue; its recorded average appears as a benchmark.") }}
+    {% endif %}
+  </div>
+  </div>
+{% endblock %}

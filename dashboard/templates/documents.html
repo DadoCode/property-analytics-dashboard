@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% from "_components.html" import empty_state, pname %}
+{% block title %}Documents — Fernhill Stays{% endblock %}
+{% macro menu(spec) -%}
+  {% set label, aria, active, options = spec %}
+  <details class="pr-menu"><summary aria-label="{{ aria }}">{{ active or label }}<span class="caret">▾</span></summary>
+    <div class="pr-pop dc-pop">{% for text, href, sel in options %}<a href="{{ href }}" class="{{ 'sel' if sel }}">{{ text }}</a>{% endfor %}</div></details>
+{%- endmacro %}
+{% macro row(d) -%}
+  <a class="dc-row dc-{{ d.state }}" href="{{ url_for('documents.review', doc_id=d.id) }}">
+    <span class="dc-file"><span class="dc-name" title="{{ d.filename }}">{{ d.filename }}</span>
+      {% set extra = d.reasons|reject('in', ['Property not linked', 'Period not confirmed'])|list %}
+      {% if d.reasons %}<span class="dc-sub dc-why dc-why-d">{{ d.reasons[:2]|join(' · ') }}{% if d.reasons|length > 2 %} · +{{ d.reasons|length - 2 }}{% endif %}</span>{% if extra %}<span class="dc-sub dc-why dc-why-m">{{ extra[:2]|join(' · ') }}</span>{% endif %}
+      {% elif d.supplier %}<span class="dc-sub">{{ d.supplier }}{% if d.n_lines > 1 %} · {{ d.n_lines }} lines{% endif %}</span>
+      {% elif d.n_lines > 1 %}<span class="dc-sub">{{ d.n_lines }} lines</span>{% endif %}</span>
+    <span class="dc-m1"><span class="dc-type"><span class="vh">Type: </span>{{ d.type_label }}</span>
+    <span class="dc-prop"><span class="vh">Property: </span>{% if d.property_text %}{{ pname(d.property_text, true) }}{% else %}<span class="dc-none">Property not linked</span>{% endif %}</span></span>
+    <span class="dc-per"><span class="vh">Period: </span>{% if d.period %}{{ d.period }}{% else %}<span class="dc-none">Period not confirmed</span>{% endif %}</span>
+    <span class="dc-state"><span class="vh">State: </span><span class="st {{ 'st-review' if d.state == 'review' else 'st-pass' if d.state == 'reviewed' else 'st-nc' }}"><i aria-hidden="true">{{ d.glyph }}</i> {{ d.state_label }}</span></span>
+    <span class="dc-evi"><span class="vh">Evidence: </span>{% if d.file_ok %}Kept as evidence{% else %}<span class="dc-miss">File missing</span>{% endif %}</span>
+    <span class="dc-amt {{ 'dc-na' if d.amount is none }}"><span class="vh">Amount: </span>{% if d.amount is not none %}{{ d.amount|money2 }}{% else %}—{% endif %}</span>
+    <span class="dc-up"><span class="vh">Uploaded: </span>{{ d.uploaded }}</span>
+  </a>
+{%- endmacro %}
+{% block content %}
+  <div class="dc">
+  <header class="dc-head">
+    <div class="dc-title">
+      <h1>Documents</h1>
+      <span class="dc-label">Evidence only</span>
+      <span class="dc-note">Accounting values are controlled by the <a href="{{ url_for('imports.index') }}">monthly workbook</a>.</span>
+    </div>
+    <details class="dc-upload" id="upload" {{ 'open' if prefill_property or prefill_type }}>
+      <summary class="dc-upload-btn">Upload evidence</summary>
+      <div class="dc-upload-pop">
+        {% if demo_mode %}
+          <p class="note m0"><strong>Uploads are off in this demo.</strong> {{ demo_message }}</p>
+        {% else %}
+          {% if prefill_property or prefill_type %}
+            <p class="dc-pre">Uploading{% if prefill_type %} a {{ doc_types[prefill_type]|lower }}{% else %} a document{% endif %}{% if prefill_property_name %} for {{ prefill_property_name }}{% endif %}. Property and type are already set.</p>
+          {% endif %}
+          {% if not extraction_available %}
+            <p class="dc-pre" id="ai-note" hidden>Automatic extraction isn't configured, so PDFs, photos and Word files can't be read automatically. They are still kept as evidence. (Spreadsheets and CSV files don't need it.)</p>
+          {% endif %}
+          <form id="upload-form" class="upload-form dc-form" method="post" action="{{ url_for('documents.upload') }}" enctype="multipart/form-data">
+            <input id="file-input" type="file" name="document" multiple required aria-label="Files to keep as evidence">
+            <div id="file-list" class="dc-files" aria-live="polite"></div>
+            <div class="dc-form-row">
+              <select name="property_id" aria-label="Property">
+                <option value="">Detect property</option>
+                {% for p in all_properties %}<option value="{{ p.id }}" {{ 'selected' if p.id == prefill_property }}>{{ p.name }}</option>{% endfor %}
+              </select>
+              <select name="doc_type" aria-label="Document type">
+                {% for key, label in doc_types.items() %}<option value="{{ key }}" {{ 'selected' if key == prefill_type }}>{{ label }}</option>{% endfor %}
+              </select>
+              <button type="submit">Upload</button>
+            </div>
+            <p class="dc-hint">PDF, photo, Excel/CSV, Word or text · up to {{ max_upload_mb }} MB per upload. Read, then kept as evidence.</p>
+          </form>
+        {% endif %}
+      </div>
+    </details>
+  </header>
+
+  {% if total %}
+    <div class="dc-rail" aria-label="Review state">
+      {% if scoped_total %}
+        <div class="rail-bar dc-bar" role="img" aria-label="{{ counts.review }} need review, {{ counts.unreviewed }} unreviewed, {{ counts.reviewed }} reviewed">
+          {% for k, cls in (('review', 'dc-r-review'), ('unreviewed', 'dc-r-un'), ('reviewed', 'dc-r-ok')) if counts[k] %}<span class="rl {{ cls }}" style="flex:{{ counts[k] }}"></span>{% endfor %}
+        </div>
+      {% endif %}
+      <nav class="dc-key" aria-label="Filter by review state">
+        <a href="{{ U(d_status='review') }}" class="{{ 'on' if f_status == 'review' }}"><span class="st st-review"><i aria-hidden="true">●</i></span><b>{{ counts.review }}</b> Needs review</a>
+        <a href="{{ U(d_status='unreviewed') }}" class="{{ 'on' if f_status == 'unreviewed' }}"><span class="st st-nc"><i aria-hidden="true">○</i></span><b>{{ counts.unreviewed }}</b> Unreviewed</a>
+        <a href="{{ U(d_status='reviewed') }}" class="{{ 'on' if f_status == 'reviewed' }}"><span class="st st-pass"><i aria-hidden="true">✓</i></span><b>{{ counts.reviewed }}</b> Reviewed</a>
+      </nav>
+    </div>
+
+    <div class="pr-bar dc-bar2">
+      <form method="get" class="pr-search" role="search" id="dc-search">
+        {% for k, v in f.items() if v and k != 'd_q' %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+        {% if f_status %}<input type="hidden" name="d_status" value="{{ f_status }}">{% endif %}
+        {% if sort != 'review' %}<input type="hidden" name="d_sort" value="{{ sort }}">{% endif %}
+        <input type="search" name="d_q" value="{{ f.d_q }}" placeholder="Search file name" aria-label="Search file name" autocomplete="off">
+      </form>
+      {% for m in menus %}{{ menu(m) }}{% endfor %}
+      {{ menu(group_menu) }}
+      {{ menu(sort_menu) }}
+    </div>
+    {% if chips %}
+      <div class="pr-chips" aria-label="Active filters">
+        {% for c in chips %}<a class="chip-x" href="{{ c.href }}" aria-label="Remove filter {{ c.label }}">{{ c.label }} <i aria-hidden="true">×</i></a>{% endfor %}
+        <a class="chip-reset" href="{{ url_for('documents.index') }}">Reset</a>
+      </div>
+    {% endif %}
+  {% endif %}
+
+  <div class="pr-surface dc-surface">
+    {% if rows %}
+      <div class="dc-cols" aria-hidden="true"><span>File</span><span>Type</span><span>Property</span><span>Period</span><span>State</span><span>Evidence</span><span class="dc-amt">Amount</span><span>Uploaded</span></div>
+      {% if groups %}
+        {% for g in groups %}
+          <section class="dc-group" aria-label="{{ g.label }}">
+            <h2 class="dc-gh"><span class="g-name">{{ g.label }}</span><span class="g-meta">{{ g.n }}</span></h2>
+            {% for d in g.rows %}{{ row(d) }}{% endfor %}
+          </section>
+        {% endfor %}
+      {% else %}
+        {% for d in rows %}{{ row(d) }}{% endfor %}
+      {% endif %}
+      {% if overflow %}<p class="dc-more">Showing the first 200. Narrow the list with a filter to see the other {{ overflow }}.</p>{% endif %}
+    {% elif not total %}
+      {{ empty_state("No documents yet", "Upload statements, invoices and receipts to keep them as evidence. Figures come from the monthly workbook.") }}
+    {% elif filtered %}
+      {{ empty_state("No documents match", "Nothing fits these filters. Remove a filter to widen the list.") }}
+    {% else %}
+      {{ empty_state("No documents", "Nothing to show.") }}
+    {% endif %}
+  </div>
+
+  <p class="dc-links">
+    <a href="{{ url_for('imports.index') }}">Imports</a>
+    {% if recon_total %}<a href="{{ url_for('reconcile.index') }}">Excel vs booking statements{% if recon_needed %} ({{ recon_needed }} month{{ 's' if recon_needed != 1 }} need a decision){% endif %}</a>{% endif %}
+    <a href="{{ url_for('reconcile.figures') }}">Figure audit</a>
+  </p>
+  </div>
+
+  <script>
+    (function () {
+      var panel = document.getElementById('upload');
+      if (!panel) return;
+      if (location.hash === '#upload') panel.open = true;
+      window.addEventListener('hashchange', function () { if (location.hash === '#upload') panel.open = true; });
+      panel.addEventListener('keydown', function (e) { if (e.key === 'Escape' && panel.open) { panel.open = false; panel.querySelector('summary').focus(); } });
+      var input = document.getElementById('file-input');
+      if (!input) return;
+      var list = document.getElementById('file-list');
+      input.addEventListener('change', function () {
+        var names = Array.prototype.map.call(input.files, function (f) { return f.name; });
+        list.textContent = names.length > 1 ? names.length + ' files: ' + names.join(', ') : '';
+        // the "no extraction key" notice matters only for files that need AI; spreadsheets are read locally
+        var note = document.getElementById('ai-note');
+        if (note) note.hidden = !names.some(function (n) { return !/\.(csv|tsv|xls|xlsx|xlsm)$/i.test(n); });
+      });
+    })();
+  </script>
+{% endblock %}

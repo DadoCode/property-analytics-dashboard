@@ -1,0 +1,102 @@
+{% extends "property/_shell.html" %}
+{% from "_components.html" import section, delta, empty_state %}
+{% block tab_content %}
+  {% if not tiles %}
+    {# the strip above already says why there is nothing to show #}
+  {% else %}
+  <section class="pf" aria-label="Performance over time">
+    <div class="pf-head">
+      <div class="seg" id="pf-metrics" role="tablist" aria-label="Metric">
+        {% if managed %}
+          <button type="button" role="tab" class="on" aria-selected="true" data-m="gross">Gross Booking Revenue</button>
+          <button type="button" role="tab" aria-selected="false" data-m="fee">Management Fee Earned</button>
+        {% else %}
+          <button type="button" role="tab" class="on" aria-selected="true" data-m="revenue">Revenue</button>
+          <button type="button" role="tab" aria-selected="false" data-m="net_profit">Property Profit</button>
+        {% endif %}
+        <button type="button" role="tab" aria-selected="false" data-m="occupancy">Occupancy</button>
+        <button type="button" role="tab" aria-selected="false" data-m="adr">ADR</button>
+        <button type="button" role="tab" aria-selected="false" data-m="revpar">RevPAR</button>
+      </div>
+      <div class="pf-tools">
+        <span class="chart-key" id="pf-key" aria-hidden="true"></span>
+        <div class="seg" id="pf-range" role="group" aria-label="Months shown"><button type="button" data-r="6">6M</button><button type="button" class="on" data-r="12">12M</button><button type="button" data-r="ytd">YTD</button></div>
+      </div>
+    </div>
+    <div class="chart-box" style="height:300px"><canvas id="pfChart" role="img" aria-label="Selected metric by month"></canvas></div>
+  </section>
+
+  {% call section("Year on year") %}
+    {% if yoy %}
+      <table class="ws-list">
+        <thead><tr><th>Month</th><th class="num">This year</th><th class="num">Same month last year</th><th class="num">Change</th></tr></thead>
+        <tbody>
+          {% for row in yoy %}
+            <tr><td>{{ row.label }}</td><td class="num">{{ row.this_year|money }}</td><td class="num">{{ row.last_year|money }}</td>
+              <td class="num">{% if row.delta_pct is not none %}{{ delta(row.delta_pct, '') }}{% else %}<span class="muted">—</span>{% endif %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      {{ empty_state("Not enough history yet", "Year-on-year needs the same months in two consecutive years.") }}
+    {% endif %}
+  {% endcall %}
+
+  <script>
+    (function () {
+      const P = {{ pack_json|safe }}, SPAN = {{ span_json|safe }}, SHIFT = {{ shift }}, COMPARE = {{ 'true' if can_compare else 'false' }}, ANCHOR = P.months[P.months.length - 1] || '';
+      const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const M = {
+        gross: { title: 'Gross Booking Revenue', fmt: 'money', bar: true, tone: 'gross' }, fee: { title: 'Management Fee Earned', fmt: 'money', bar: true },
+        revenue: { title: 'Company Revenue', fmt: 'money', bar: true }, net_profit: { title: 'Property Profit', fmt: 'money', bar: true },
+        occupancy: { title: 'Occupancy', fmt: 'pct' }, adr: { title: 'ADR', fmt: 'money' }, revpar: { title: 'RevPAR', fmt: 'money' },
+      };
+      let metric = document.querySelector('#pf-metrics button.on').dataset.m, range = '12';
+      const inSpan = (m) => SPAN.indexOf(m) !== -1;
+      const fmtVal = (v, f) => v === null || v === undefined ? '—' : (f === 'pct' ? pctShort(v) : moneyFull(v));
+      const GREEN = 'rgba(14,159,110,0.86)', GREEN_DIM = 'rgba(14,159,110,0.28)', GROSS = 'rgba(100,118,110,0.5)', GROSS_DIM = 'rgba(100,118,110,0.22)', NEG = 'rgba(194,65,58,0.78)', NEG_DIM = 'rgba(194,65,58,0.26)';
+      const chart = new Chart(document.getElementById('pfChart'), {
+        data: { labels: [], datasets: [
+          { type: 'bar', label: '', data: [], order: 2, backgroundColor: [] },
+          { type: 'line', label: 'Compare', data: [], order: 1, borderColor: 'rgba(20,32,28,0.55)', borderDash: [5, 4], borderWidth: 1.4, pointRadius: 2, pointBackgroundColor: '#fcfcfb', pointBorderColor: 'rgba(20,32,28,0.55)', tension: 0, spanGaps: false },
+          { type: 'line', label: 'Portfolio average', data: [], order: 1, borderColor: 'rgba(100,118,110,0.7)', borderDash: [2, 3], borderWidth: 1.2, pointRadius: 0, tension: 0, spanGaps: false },
+        ] },
+        options: {
+          interaction: { mode: 'index', intersect: false }, layout: { padding: { top: 12, bottom: 2 } }, animation: reduced ? false : { duration: 240 },
+          scales: quietScales(moneyShort),
+          plugins: { legend: { display: false }, tooltip: { filter: (i) => i.raw !== null && i.raw !== undefined, callbacks: { label: (i) => `${i.dataset.label}: ${fmtVal(i.raw, M[metric].fmt)}` } } },
+        },
+      });
+      function indices() {
+        const all = P.months.map((_, i) => i);
+        if (range === '6') return all.slice(-6);
+        if (range === 'ytd') return all.filter(i => P.months[i].slice(0, 4) === ANCHOR.slice(0, 4));
+        return all.slice(-12);
+      }
+      function apply() {
+        const info = M[metric], ix = indices(), series = P[metric] || [], labels = ix.map(i => P.months[i]), vals = ix.map(i => series[i]);
+        const base = info.tone === 'gross' ? [GROSS, GROSS_DIM] : [GREEN, GREEN_DIM];
+        const d = chart.data.datasets;
+        d[0].type = info.bar ? 'bar' : 'line'; d[0].label = info.title; d[0].data = vals;
+        if (info.bar) { d[0].backgroundColor = labels.map((m, k) => vals[k] < 0 ? (inSpan(m) ? NEG : NEG_DIM) : (inSpan(m) ? base[0] : base[1])); d[0].borderColor = undefined; d[0].borderWidth = 0; d[0].fill = false; d[0].pointRadius = 0; }
+        else { d[0].backgroundColor = 'rgba(14,159,110,0.10)'; d[0].borderColor = '#0e9f6e'; d[0].borderWidth = 2; d[0].fill = true; d[0].tension = 0; d[0].pointRadius = labels.map(m => inSpan(m) ? 3.5 : 0); d[0].pointBackgroundColor = '#0e9f6e'; }
+        d[1].label = info.title + ' (' + ({{ ctx.compare|tojson }} === 'previous_year' ? 'previous year' : 'previous period') + ')';
+        d[1].data = COMPARE ? ix.map(i => (i - SHIFT >= 0 ? series[i - SHIFT] : null)) : [];
+        d[2].data = metric === 'occupancy' ? ix.map(i => P.occ_portfolio[i]) : [];
+        chart.data.labels = labels;
+        chart.options.scales.y.ticks.callback = info.fmt === 'pct' ? (v) => pctShort(v) : moneyShort;
+        chart.options.scales.y.suggestedMax = info.fmt === 'pct' ? 100 : undefined;
+        chart.update();
+        document.getElementById('pf-key').innerHTML = '<i class="key-now"></i>' + info.title + (COMPARE ? ' <i class="key-cmp"></i>' + ({{ ctx.compare|tojson }} === 'previous_year' ? 'Previous year' : 'Previous period') : '') + (metric === 'occupancy' ? ' <i class="key-port"></i>Portfolio average' : '');
+        document.querySelectorAll('#pf-metrics button').forEach((b) => { const on = b.dataset.m === metric; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); });
+      }
+      document.querySelectorAll('#pf-metrics button').forEach((b, i, all) => {
+        b.addEventListener('click', () => { metric = b.dataset.m; apply(); });
+        b.addEventListener('keydown', (e) => { const s = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0; if (!s) return; e.preventDefault(); const nx = all[(i + s + all.length) % all.length]; nx.focus(); metric = nx.dataset.m; apply(); });
+      });
+      document.querySelectorAll('#pf-range button').forEach((b) => b.addEventListener('click', () => { range = b.dataset.r; document.querySelectorAll('#pf-range button').forEach(x => x.classList.toggle('on', x === b)); apply(); }));
+      apply();
+    })();
+  </script>
+  {% endif %}
+{% endblock %}

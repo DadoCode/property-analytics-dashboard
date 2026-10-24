@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+{% from "_components.html" import empty_state, mlink, pname %}
+{% block title %}Properties — Fernhill Stays{% endblock %}
+{% block content %}
+  {# ---------- one portfolio band: four figures and how the portfolio checks out ---------- #}
+  <section class="pr-band" aria-label="Portfolio summary">
+    <div class="pb-metrics">
+      <div class="ps"><span class="ps-label">Active properties</span><span class="ps-value">{{ summary.active }}</span><span class="ps-sub">{{ summary.operated }} operated · {{ summary.managed }} managed</span></div>
+      <div class="ps"><span class="ps-label">Company Revenue</span><span class="ps-value" title="{{ summary.revenue|money2 }} = operated {{ summary.op_revenue|money2 }} + management fees {{ summary.fees|money2 }}">{{ '—' if summary.no_data else summary.revenue|money }}</span>{% if not summary.no_data %}<span class="vh">operated {{ summary.op_revenue|money }} + fees {{ summary.fees|money }}</span>{% endif %}</div>
+      <div class="ps"><span class="ps-label">Property Profit</span><span class="ps-value" title="{{ summary.profit|money2 }} = operated {{ summary.op_profit|money2 }} + management fees {{ summary.fees|money2 }}">{{ '—' if summary.no_data else summary.profit|money }}</span>{% if not summary.no_data %}<span class="vh">operated {{ summary.op_profit|money }} + fees {{ summary.fees|money }}</span>{% endif %}</div>
+      <div class="ps"><span class="ps-label">Portfolio occupancy</span><span class="ps-value">{{ '—' if summary.no_data else ('%.0f'|format(summary.occupancy * 100) ~ '%') }}</span></div>
+    </div>
+    {% if rail %}
+    <div class="pb-rail">
+      <div class="rail-bar" role="group" aria-label="How the {{ rail_total }} properties in this period check out">
+        {% for x in rail %}<a class="rl rl-{{ x.key }}" style="flex-basis:{{ x.pct }}%" href="{{ U(check=x.key, view='all') }}" aria-label="{{ x.label }}: {{ x.count }} of {{ rail_total }}. Show these."></a>{% endfor %}
+      </div>
+      <div class="rail-key">{% for x in rail %}<a href="{{ U(check=x.key, view='all') }}"><i class="dot dot-{{ x.key }}" aria-hidden="true"></i>{{ x.label }} {{ x.count }}</a>{% endfor %}</div>
+    </div>
+    {% endif %}
+  </section>
+
+  <div class="pr-wrap" id="pr-wrap">
+    {# ---------- the attention switch and one quiet toolbar ---------- #}
+    <div class="pr-bar">
+      <div class="seg" role="group" aria-label="Which properties to list">
+        <a href="{{ U(view='attention') }}" class="{{ 'on' if view == 'attention' }}" aria-current="{{ 'true' if view == 'attention' else 'false' }}">Needs attention <span class="count">{{ attention_count }}</span></a>
+        <a href="{{ U(view='all') }}" class="{{ 'on' if view == 'all' }}" aria-current="{{ 'true' if view == 'all' else 'false' }}">All properties <span class="count">{{ all_count }}</span></a>
+      </div>
+      <form method="get" class="pr-search" role="search">
+        {% for k, v in {'from': ctx.from_input ~ '-01', 'to': ctx.to_input ~ '-01', 'compare': ctx.compare, 'status': status if status != 'active' else '', 'model': model or '', 'check': check or '', 'view': view}.items() if v %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+        <input type="search" name="q" id="pr-q" value="{{ q }}" placeholder="Search" aria-label="Search properties by name or address" autocomplete="off">
+      </form>
+      <details class="pr-menu"><summary aria-label="Filter by model">{{ 'Model: ' ~ model|capitalize if model else 'Model' }}<span class="caret">▾</span></summary>
+        <div class="pr-pop"><a href="{{ U(model=None) }}" class="{{ 'sel' if not model }}">All models</a><a href="{{ U(model='operated') }}" class="{{ 'sel' if model == 'operated' }}">Operated</a><a href="{{ U(model='managed') }}" class="{{ 'sel' if model == 'managed' }}">Managed</a></div></details>
+      <details class="pr-menu"><summary aria-label="Filter by check status">{{ 'Check: ' ~ {'pass': 'PASS', 'review': 'REVIEW', 'nocontrol': 'NO CONTROL', 'noimport': 'No import', 'nodata': 'No data'}[check] if check else 'Check' }}<span class="caret">▾</span></summary>
+        <div class="pr-pop"><a href="{{ U(check=None) }}" class="{{ 'sel' if not check }}">Any</a><a href="{{ U(check='pass') }}" class="{{ 'sel' if check == 'pass' }}">✓ PASS</a><a href="{{ U(check='review') }}" class="{{ 'sel' if check == 'review' }}">● REVIEW</a><a href="{{ U(check='nocontrol') }}" class="{{ 'sel' if check == 'nocontrol' }}">○ NO CONTROL</a><a href="{{ U(check='noimport') }}" class="{{ 'sel' if check == 'noimport' }}">No import</a><a href="{{ U(check='nodata') }}" class="{{ 'sel' if check == 'nodata' }}">No data</a></div></details>
+      <details class="pr-menu"><summary aria-label="Sort the list">Sort: {{ sort_labels[sort] }}<span class="caret">▾</span></summary>
+        <div class="pr-pop">{% for k, label in sort_labels.items() %}<a href="{{ U(sort=k) }}" class="{{ 'sel' if sort == k }}">{{ label }}</a>{% endfor %}</div></details>
+      <div class="pr-life" role="group" aria-label="Lifecycle">
+        <a href="{{ U(status=None) }}" class="{{ 'on' if status == 'active' }}">Active <span class="count">{{ active_total }}</span></a>
+        <a href="{{ U(status='inactive') }}" class="{{ 'on' if status == 'inactive' }}">Inactive <span class="count">{{ inactive_total }}</span></a>
+      </div>
+    </div>
+    {% if q or model or check %}
+      <div class="pr-chips" aria-label="Active filters">
+        {% if q %}<a class="chip-x" href="{{ U(q=None) }}" aria-label="Remove search “{{ q }}”">“{{ q }}” <i aria-hidden="true">×</i></a>{% endif %}
+        {% if model %}<a class="chip-x" href="{{ U(model=None) }}" aria-label="Remove filter {{ model|capitalize }}">{{ model|capitalize }} <i aria-hidden="true">×</i></a>{% endif %}
+        {% if check %}<a class="chip-x" href="{{ U(check=None) }}" aria-label="Remove filter {{ check }}">{{ {'pass': 'PASS', 'review': 'REVIEW', 'nocontrol': 'NO CONTROL', 'noimport': 'No import', 'nodata': 'No data'}[check] }} <i aria-hidden="true">×</i></a>{% endif %}
+        <a class="chip-reset" href="{{ U(q=None, model=None, check=None) }}">Reset</a>
+      </div>
+    {% endif %}
+
+    <div class="pr-layout">
+      <div class="pr-list"><div class="pr-surface">
+        {% if groups %}
+        <table class="pr-table" id="pr-table">
+          <thead><tr><th scope="col">Property</th><th scope="col" class="num">The company earned</th><th scope="col" class="num">Occupancy</th><th scope="col" class="num c-revpar">RevPAR</th><th scope="col" class="num c-trend" title="Change in the company result against {{ compare_label or 'the comparison period' }}">Change</th><th scope="col">Status</th></tr></thead>
+          {% for label, rows in groups %}
+          <tbody>
+            {% if label %}<tr class="grp"><th colspan="6" scope="rowgroup">{{ label|upper }} · {{ rows|length }}</th></tr>{% endif %}
+            {% for r in rows %}
+              <tr class="pr-row" data-pid="{{ r.id }}" data-name="{{ r.name|lower }}" data-addr="{{ (r.address or '')|lower }}" data-attn="{{ 1 if r.attention else 0 }}">
+                <td class="c-name"><a class="pr-name" href="{{ cx('properties.detail', property_id=r.id) }}" title="{{ r.name }}">{{ pname(r.name, true) }}</a>
+                  <span class="pr-model">{{ r.model }}{% if r.managed %} · {{ ('%g'|format(r.fee) ~ '%') if r.fee else 'fee % not set' }}{% endif %}</span></td>
+                {% if r.not_active or r.no_data %}
+                  <td class="num c-none" colspan="4"><span class="zero" title="{{ 'No performance to show: this property was not active in this period' if r.not_active else 'No data imported for this period' }}">—</span></td>
+                {% else %}
+                  <td class="num c-earned">
+                    <span class="pr-main">{% if r.revenue %}{{ mlink(wsurl(ctx, 'properties.bookings', r.id) ~ ('#fees' if r.managed else '#revenue-records'), r.revenue|money, ('Management fee record for ' if r.managed else 'Revenue records for ') ~ r.name) }}{% else %}{{ r.revenue|money }}{% endif %}</span><span class="pr-cap">{{ 'fee earned' if r.managed else 'revenue' }}</span>
+                    <span class="pr-second">{% if r.managed %}{% if r.gross %}{{ mlink(wsurl(ctx, 'properties.bookings', r.id) ~ '#revenue-records', r.gross|money, 'Gross booking revenue records for ' ~ r.name) }}{% else %}{{ (r.gross or 0)|money }}{% endif %} gross booking revenue{% else %}{% if r.revenue or r.profit %}{{ mlink(wsurl(ctx, 'properties.detail', r.id), r.profit|money, 'Property Profit breakdown for ' ~ r.name) }}{% else %}{{ r.profit|money }}{% endif %} profit{% endif %}</span></td>
+                  <td class="num c-occ"><span class="occ"><span class="occ-n">{% if r.occupancy %}{{ mlink(wsurl(ctx, 'properties.bookings', r.id) ~ '#booked-nights', '%.0f'|format(r.occupancy * 100) ~ '%', 'Booked nights for ' ~ r.name) }}{% else %}0%{% endif %}</span><span class="occ-bar" role="img" aria-label="{{ '%.0f'|format(r.occupancy * 100) }}% of nights booked"><i style="width:{{ [r.occupancy * 100, 100]|min|round(0) }}%"></i></span></span></td>
+                  <td class="num c-revpar">{{ r.revpar|money }}</td>
+                  <td class="num c-trend">{% if r.change is none %}<span class="zero" title="No comparison available">—</span>{% else %}<span class="chg {{ 'up' if r.change > 0 else ('down' if r.change < 0 else 'flat') }}" aria-label="{{ 'up' if r.change > 0 else ('down' if r.change < 0 else 'unchanged') }} {{ '%.0f'|format(r.change|abs) }}% against {{ compare_label }}"><span aria-hidden="true">{{ '↑' if r.change > 0 else ('↓' if r.change < 0 else '→') }} {{ '%.0f'|format(r.change|abs) }}%</span></span>{% endif %}</td>
+                {% endif %}
+                <td class="status c-status">
+                  {% if not r.active %}<span class="st-q" title="No longer active. Its history is kept.">Inactive</span>
+                  {% elif r.not_active %}<span class="st-q" title="This property had not joined the portfolio in this period">Not active in this period</span>
+                  {% elif r.check == 'review' and r.review %}<a class="st st-review" href="/imports/{{ r.review }}#prop-{{ r.id }}" title="Left in REVIEW by the import. Open the reason."><i aria-hidden="true">●</i> REVIEW</a>
+                  {% elif r.check == 'review' %}<span class="st st-review"><i aria-hidden="true">●</i> REVIEW</span>
+                  {% elif r.check == 'pass' %}<span class="st st-pass"><i aria-hidden="true">✓</i> PASS</span>
+                  {% elif r.check == 'nodata' %}<span class="st st-nodata"><i aria-hidden="true">○</i> No data</span>
+                  {% elif r.check == 'nocontrol' %}<span class="st st-nc" title="Imported, but no control value exists to compare with"><i aria-hidden="true">○</i> NO CONTROL</span>
+                  {% else %}<span class="st-q" title="No workbook import covers this property for this period">No import</span>{% endif %}
+                  {% for reason in r.reasons if reason not in ('Review', 'No data') %}<span class="st-note">{{ reason }}</span>{% endfor %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+          {% endfor %}
+        </table>
+        <p class="pr-none" id="pr-none" hidden>No property matches your search.</p>
+        {% elif view == 'attention' %}
+          <p class="pr-empty">Nothing needs attention in this period. <a href="{{ U(view='all') }}">All properties →</a></p>
+        {% else %}
+          {{ empty_state('No properties match "' ~ q ~ '"' if q else 'No ' ~ status ~ ' properties', "Try a different name or address, or reset the filters.", "Reset", U(q=None, model=None, check=None)) }}
+        {% endif %}
+      </div></div>
+
+      <aside class="pr-insp" id="inspector" role="dialog" aria-modal="false" aria-labelledby="insp-title" hidden>
+        <div class="insp-head">
+          <div><h2 id="insp-title" tabindex="-1"></h2><p class="insp-addr" id="insp-addr"></p></div>
+          <button type="button" class="insp-close" id="insp-close" aria-label="Close property summary">×</button>
+        </div>
+        <div id="insp-body"></div>
+      </aside>
+    </div>
+  </div>
+
+  <script type="application/json" id="insp-data">{{ inspector_json|safe }}</script>
+  <script>
+    (function () {
+      const DATA = JSON.parse(document.getElementById('insp-data').textContent || '{}');
+      const wrap = document.getElementById('pr-wrap'), insp = document.getElementById('inspector'), body = document.getElementById('insp-body');
+      const table = document.getElementById('pr-table');
+      let current = null, opener = null;
+      const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+      const section = (label) => { const s = el('section', 'insp-sec'); if (label) s.appendChild(el('h3', null, label)); return s; };
+      function render(d) {
+        document.getElementById('insp-title').textContent = d.title;
+        document.getElementById('insp-addr').textContent = d.address;
+        body.replaceChildren();
+        if (d.hero) {
+          const h = el('div', 'insp-hero');
+          const v = el('a', 'hv' + (d.hero[1].charAt(0) === '\u2212' ? ' neg' : ''), d.hero[1]); v.href = d.hero[2];
+          h.appendChild(v); h.appendChild(el('span', 'hl', d.hero[0]));
+          body.appendChild(h);
+          const lines = el('div', 'insp-lines');
+          d.lines.forEach((f) => { const row = el('div', 'insp-line' + (f[3] ? ' quiet' : '')); row.appendChild(el('span', 'k', f[0])); const a = el('a', 'v', f[1]); a.href = f[2]; row.appendChild(a); lines.appendChild(row); });
+          body.appendChild(lines);
+        } else if (d.message) {
+          body.appendChild(el('p', 'insp-note', d.message));
+        }
+        if (d.attention.length) {
+          const a = section('Attention');
+          d.attention.forEach((x) => { const p = el('p', 'insp-reason'); p.appendChild(el('strong', null, x[0] + ' ')); p.appendChild(document.createTextNode(x[1])); a.appendChild(p); });
+          body.appendChild(a);
+        }
+        const grid = el('dl', 'insp-meta');
+        d.meta.forEach((m) => {
+          const cell = el('div'); cell.appendChild(el('dt', null, m[0]));
+          const dd = el('dd'); if (m[2]) { const a = el('a', null, m[1]); a.href = m[2]; dd.appendChild(a); } else dd.textContent = m[1];
+          cell.appendChild(dd); grid.appendChild(cell);
+        });
+        body.appendChild(grid);
+        const act = el('div', 'insp-actions');
+        d.actions.forEach((x) => { const a = el('a', null, x[0] + ' \u2192'); a.href = x[1]; act.appendChild(a); });
+        body.appendChild(act);
+      }
+      function open(pid, from) {
+        if (!DATA[pid]) return;
+        current = pid; opener = from || opener;
+        render(DATA[pid]);
+        insp.hidden = false; wrap.classList.add('insp-open');
+        document.querySelectorAll('.pr-row').forEach((r) => { const on = r.dataset.pid === pid; r.classList.toggle('sel', on); const a = r.querySelector('.pr-name'); if (a) { if (on) a.setAttribute('aria-current', 'true'); else a.removeAttribute('aria-current'); } });
+        document.getElementById('insp-title').focus({ preventScroll: true });
+      }
+      function close() {
+        if (insp.hidden) return;
+        insp.hidden = true; wrap.classList.remove('insp-open'); current = null;
+        document.querySelectorAll('.pr-row.sel').forEach((r) => { r.classList.remove('sel'); const a = r.querySelector('.pr-name'); if (a) a.removeAttribute('aria-current'); });
+        if (opener && document.contains(opener)) opener.focus({ preventScroll: true });
+      }
+      if (table) {
+        table.addEventListener('click', (e) => {
+          const row = e.target.closest('.pr-row'); if (!row) return;
+          const link = e.target.closest('a');
+          if (link && !link.classList.contains('pr-name')) return;                         // a figure or the REVIEW link goes where it says
+          if (link && (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1)) return;     // open-in-new-tab still works
+          e.preventDefault();
+          open(row.dataset.pid, row.querySelector('.pr-name'));
+        });
+      }
+      document.getElementById('insp-close').addEventListener('click', close);
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !insp.hidden) { e.preventDefault(); close(); } });
+      document.addEventListener('click', (e) => {                                          // click outside closes (not on a row, the panel, or a menu)
+        if (insp.hidden || e.target.closest('#inspector, .pr-row, .pr-bar, .pr-chips')) return;
+        close();
+      });
+      // quiet menus: one open at a time, closed by an outside click or Escape
+      document.addEventListener('click', (e) => { document.querySelectorAll('.pr-menu[open]').forEach((m) => { if (!m.contains(e.target)) m.open = false; }); });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.querySelectorAll('.pr-menu[open]').forEach((m) => { m.open = false; }); });
+      // instant search over the rows already on the page (Enter keeps it in the URL)
+      const q = document.getElementById('pr-q');
+      if (q && table) {
+        const apply = () => {
+          const t = q.value.trim().toLowerCase(); let shown = 0;
+          table.querySelectorAll('.pr-row').forEach((r) => { const hit = !t || r.dataset.name.includes(t) || r.dataset.addr.includes(t); r.hidden = !hit; if (hit) shown++; });
+          table.querySelectorAll('tbody').forEach((tb) => { const any = [...tb.querySelectorAll('.pr-row')].some((r) => !r.hidden); tb.hidden = !any; });
+          document.getElementById('pr-none').hidden = shown > 0;
+        };
+        q.addEventListener('input', apply); apply();
+      }
+    })();
+  </script>
+{% endblock %}

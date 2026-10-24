@@ -1,0 +1,12 @@
+def register_blueprints(app):
+    from routes import overview, properties, bookings, expenses, documents, reports, targets, auth, reconcile, imports
+    app.register_blueprint(overview.bp)
+    app.register_blueprint(properties.bp)
+    app.register_blueprint(bookings.bp)
+    app.register_blueprint(expenses.bp)
+    app.register_blueprint(documents.bp)
+    app.register_blueprint(reports.bp)
+    app.register_blueprint(targets.bp)
+    app.register_blueprint(auth.bp)
+    app.register_blueprint(reconcile.bp)
+    app.register_blueprint(imports.bp)

@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% from "_components.html" import page_head %}
+{% from "_import_macros.html" import val, change, diffv, status_pill, check_pill, checks_table, live_table, status_legend, flow, state, rail %}
+{% block title %}Import #{{ batch.id }} — Fernhill Stays{% endblock %}
+{# Which figures an imported area shows, in order. Primary rows are always visible; the rest appear under "All metrics" (or when they changed). #}
+{% set PRIMARY_OP = ['revenue', 'property_costs', 'profit'] %}
+{% set PRIMARY_MG = ['revenue', 'property_costs', 'management_fee'] %}
+{% set LABEL = {'revenue': 'Revenue', 'property_costs': 'Property costs', 'management_fee': 'Management fee', 'profit': 'Property profit', 'total_expenses': 'All expenses',
+                'days': 'Days booked', 'occupancy': 'Occupancy', 'business_costs': 'Business costs'} %}
+{% set KIND = {'days': 'int', 'occupancy': 'pct'} %}
+{% block content %}
+  {{ flow('applied') }}
+  <p class="imp-back"><a href="{{ url_for('imports.index') }}">&larr; All imports</a></p>
+  <header class="imp-head">
+    <div>
+      <div class="imp-eyebrow">{{ 'Undone' if batch.status == 'undone' else 'Applied' }} · Batch #{{ batch.id }}</div>
+      <h1>{{ month_label(batch.period) if batch.period else 'Import #' ~ batch.id }}</h1>
+      <p class="imp-sub">Import #{{ batch.id }} · Monthly workbook · <span class="imp-file" title="{{ batch.filename }}">{{ batch.filename }}</span></p>
+    </div>
+  </header>
+  <section class="imp-band imp-band-applied" aria-label="What this import did">
+    <div class="imp-counts"><span><b>{{ before|length }}</b> area{{ 's' if before|length != 1 }} {{ 'were updated' if batch.status == 'applied' else 'were updated, then undone' }}</span><span class="d">·</span>
+      <span><b>{{ batch.rows_added + batch.rows_changed + batch.rows_removed }}</b> row change{{ 's' if (batch.rows_added + batch.rows_changed + batch.rows_removed) != 1 }}</span></div>
+    <div class="imp-verdict">{{ batch.rows_added }} added · {{ batch.rows_changed }} changed · {{ batch.rows_removed }} superseded · applied {{ (batch.applied_at or '')[:16] }}{% if batch.undone_at %} · undone {{ batch.undone_at[:16] }}{% endif %} · workbook <span class="mono">{{ batch.file_hash[:10] }}</span></div>
+    {% if state_counts.review or state_counts.pass or state_counts.nocontrol %}{{ rail(state_counts, false) }}{% endif %}
+  </section>
+  <p class="meta-line">{{ status_pill(batch.status) }} <a href="{{ url_for('expenses.index', t_batch=batch.id, property='all', **({'from': batch.period ~ '-01', 'to': batch.period ~ '-01'} if batch.period else {})) }}#ledger">Expense rows this import wrote ›</a> <span class="note">· income and management-fee rows are on each property's Bookings tab, under Revenue records.</span></p>
+  {% if created %}<p class="meta-line"><strong>New properties created by this import:</strong> {% for pid in created %}{{ names.get(pid, pid) }}{{ ', ' if not loop.last }}{% endfor %}
+    <span class="note">· Undo removes them again only while nothing else has been recorded against them.</span></p>{% endif %}
+
+  {% set vmap = {} %}{% for v in verification %}{% set _ = vmap.update({v.property_id: v}) %}{% endfor %}
+  {# one verdict per area: REVIEW if the import-time checks or the live check flagged it #}
+  {% set verdict = {} %}
+  {% for pid, checks in recon.items() %}
+    {% set _ = verdict.update({pid: (vmap[pid].verdict if pid in vmap else ('REVIEW' if checks|selectattr('status', 'equalto', 'REVIEW')|list else 'PASS'))}) %}
+  {% endfor %}
+
+  <section class="section mt4">
+    <div class="section-head"><h2>Before and after</h2><button type="button" class="quiet" data-toggle-rows="cmp" aria-expanded="false">All metrics</button></div>
+    <div class="card flush">
+      <table class="cmp" id="cmp">
+        <thead><tr><th>Area · metric</th><th class="num">Before</th><th class="num">After</th><th class="num">Change</th></tr></thead>
+        {% for pid in order_before %}{% set b0 = before[pid] %}{% set b = b0 or {} %}{% set a = after[pid] %}
+          {% set managed = (pid in managed_ids) or ((vmap[pid].model == 'managed') if pid in vmap else ((a.get('management_fee') or 0) > 0)) %}
+          {% set primary = ['business_costs'] if pid == business_id else (PRIMARY_MG if managed else PRIMARY_OP) %}
+          {% set order = primary + ['total_expenses', 'days', 'occupancy'] %}
+          <tbody>
+            <tr class="grp"><td colspan="4"><div class="grp-head">
+              <span><strong>{{ names.get(pid, pid) }}</strong>{% if pid != business_id %} <span class="note">{{ 'Managed' if managed else 'Operated' }}</span>{% endif %}{% if b0 is none %} <span class="pill brand">new property</span>{% endif %}</span>
+              <a class="grp-status" href="#prop-{{ pid }}" title="Open this area's reconciliation">{{ check_pill(verdict.get(pid, 'PASS')) }}</a>
+            </div></td></tr>
+            {% for key in order if key in a or key in b %}
+              {% set changed = (key in a and key in b and (a[key] is not none and b[key] is not none) and (a[key] - b[key])|abs > 0.0049) or b0 is none %}
+              {% set k = KIND.get(key, 'money') %}
+              <tr class="{{ 'more' if key not in primary and not changed }}">
+                <td class="metric">{{ LABEL[key] }}</td>
+                <td class="num muted">{{ val(b.get(key), k) if b0 is not none else '—' }}</td>
+                <td class="num">{{ val(a.get(key), k) }}</td>
+                <td class="num">{% if b0 is none %}<span class="zero">new</span>{% else %}{{ diffv((a.get(key) - b.get(key)) if (a.get(key) is not none and b.get(key) is not none) else none, k) }}{% endif %}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        {% endfor %}
+      </table>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><h2>Reconciliation at import time</h2><span class="note">The workbook's own totals against what was imported, exactly as evaluated when this import was applied. A separate "Current status" check below each area compares workbook, ledger and dashboard now.</span></div>
+    {{ status_legend() }}
+    {% for pid in order_recon %}
+      {% set checks = recon[pid] %}
+      {% set v = vmap.get(pid) %}
+      {% set cchecks = current.get(pid, checks) %}
+      {% set review = cchecks|selectattr('status', 'equalto', 'REVIEW')|list %}
+      {% set nocontrol = cchecks|selectattr('status', 'equalto', 'NO CONTROL')|list %}
+      {% set passed = cchecks|selectattr('status', 'equalto', 'PASS')|list %}
+      <div class="recon {{ 'is-review' if verdict.get(pid) == 'REVIEW' }}" id="prop-{{ pid }}">
+        <div class="recon-head">
+          <span><strong>{{ names.get(pid, pid) }}</strong>{% if v %} <span class="note">{{ v.model }}</span>{% endif %}</span>
+          <span class="recon-head-r">{% if pid != business_id and batch.period %}
+            <a href="{{ url_for('properties.bookings', property_id=pid, **{'from': batch.period ~ '-01', 'to': batch.period ~ '-01', 'compare': 'none'}) }}#revenue-records">Revenue records ›</a>
+            <a href="{{ url_for('properties.expenses_tab', property_id=pid, **{'from': batch.period ~ '-01', 'to': batch.period ~ '-01', 'compare': 'none'}) }}">Expenses ›</a>{% endif %}
+            {{ check_pill(verdict.get(pid, 'PASS')) }}</span>
+        </div>
+        {% if review %}{{ checks_table(review) }}{% endif %}
+        {% if v and v.reasons and not review %}<p class="note recon-note">Flagged by the live check: {{ v.reasons|join(', ') }}</p>{% endif %}
+        {% if nocontrol %}
+          <details class="sub nc"><summary>{{ nocontrol|length }} figure{{ 's' if nocontrol|length != 1 }} with no workbook control <span class="note">· no comparison available, not a failure</span></summary>{{ checks_table(nocontrol) }}</details>
+        {% endif %}
+        {% if passed %}
+          <details class="sub"><summary><span class="rc-pass-text">✓ {{ passed|length }} check{{ 's' if passed|length != 1 }} passed</span></summary>{{ checks_table(passed) }}</details>
+        {% endif %}
+        {% if v %}
+          {% set live_review = v.rows|selectattr('status', 'equalto', 'REVIEW')|list %}
+          <details class="sub" id="verify-{{ pid }}" {{ 'open' if live_review }}><summary>Current status · Workbook = ledger = dashboard <span class="note">· checked now{% if not live_review %} · {{ 'all figures agree' if not (v.rows|selectattr('status', 'equalto', 'NO CONTROL')|list) else 'nothing disagrees' }}{% endif %}</span></summary>{{ live_table(v.rows) }}</details>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </section>
+
+  {% if undoable %}
+    <section class="section undo-block">
+      <form method="post" action="{{ url_for('imports.undo', batch_id=batch.id) }}" onsubmit="return confirm('Undo this import? The rows it added are removed and the rows it replaced are put back exactly as they were.')">
+        <button type="submit" class="secondary" {% if demo_mode %}disabled title="Disabled in the read-only demo."{% endif %}>Undo import</button>
+        {% if demo_mode %}<span class="note">Disabled in the read-only demo.</span>{% else %}<span class="note">Restores the dashboard to exactly how it was before this import. Refused if a later import or an edit to these rows would make that a guess.</span>{% endif %}
+      </form>
+    </section>
+  {% endif %}
+
+  <script>
+    // A link like /imports/23#prop-example-property goes straight to that property's reconciliation.
+    (function () {
+      const go = () => { const el = location.hash && document.getElementById(decodeURIComponent(location.hash.slice(1))); if (el) { if (el.tagName === 'DETAILS') el.open = true; el.scrollIntoView({ block: 'start' }); } };
+      go(); window.addEventListener('hashchange', go);
+    })();
+  </script>
+{% endblock %}

@@ -1,0 +1,203 @@
+"""Shared helpers used by more than one route module -- property lookups,
+percentage-delta math, and the month-tile builders every page's KPI row
+is assembled from. Nothing here talks to Flask (no request/response) --
+it's plain data access and arithmetic over a connection."""
+import re
+import services.kpis as kpis
+
+MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June",
+               "July", "August", "September", "October", "November", "December"]
+MONTH_ABBR = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+CATEGORIES = ["purchase", "cleaning", "utilities", "rent", "deposit", "council_tax", "maintenance", "management_fee",
+              "insurance", "software", "accounting", "marketing", "salary", "furniture", "booking_income", "other"]
+
+# One-sentence definitions for the handful of labels that are easy to
+# misread -- not a replacement for a clear name, just precision on top
+# of one. Keyed by the same `key` every KPI tile already carries, so a
+# tile picks its own definition up automatically (see kpi_tile() in
+# _components.html); referenced directly by `title=` where a plain
+# table header wants the same wording without the visible icon.
+METRIC_INFO = {
+    "gross_booking_revenue": "Total guest booking value for reservations in this period -- not the same as Company Revenue. A managed property's booking value mostly belongs to its owner; the company's own income from it is Management Fee Earned.",
+    "revenue": "Revenue earned by the company in the selected period: full property revenue from operated properties plus management fees earned from managed properties.",
+    "fee": "The management fee the company earns for managing a property, based on the agreed percentage of that property's booking revenue.",
+    "net_profit": "Revenue minus this property's own costs. For a managed property, this equals Management Fee Earned, since the company's own income from it is just the fee.",
+    "company_net_profit": "Company Revenue minus operated-property costs and recorded business costs for the selected period. Managed owners' revenue and costs are excluded. Based on recorded dashboard data.",
+    # The portfolio Overview's Property Profit (same figure as always; this only words it): operated profit plus the management fees the company earns.
+    "property_profit_portfolio": "Property Profit is company revenue (operated-property revenue plus management fees) minus operated-property costs. Managed-property owner economics are excluded.",
+    "adr": "Average nightly rate achieved on booked nights.",
+    "revpar": "Revenue per available night (Occupancy × ADR).",
+    # Targets' own calculation is NOT business-model-aware (see
+    # routes/targets.py) -- it's gross booking revenue minus this
+    # property's own costs for every property the same way, including a
+    # managed property's management-fee expense. That's a different
+    # number from the adjusted "Property Profit" shown on
+    # Overview/Properties, so it gets its own distinct name ("Operating
+    # Profit") rather than reusing that one.
+    "operating_profit": "Gross Booking Revenue minus property-level operating costs. Company-level business expenses are not included.",
+    "occupancy": "Booked nights as a share of available nights in the period. Months imported from the workbook may carry a monthly total rather than individual reservations.",
+    "booked_nights": "Nights with a guest in the period. Months imported from the workbook may carry a monthly total rather than individual reservations.",
+    "property_costs": "Genuine costs recorded against this property in the selected period. Management-fee transfers are excluded -- that's the company's own income, not a cost.",
+}
+
+
+def pct_delta(current, previous, min_base=0):
+    """None when there's nothing to compare against, or when `previous` is
+    too small (below min_base) for a percentage off it to mean anything --
+    a swing off a near-zero base is noise, not signal (e.g. "+8490%" when
+    last year's figure was a few pounds), so it's omitted rather than
+    shown literally or capped."""
+    if not previous or abs(previous) < min_base:
+        return None
+    return round((current - previous) / abs(previous) * 100, 1)
+
+
+_POSTCODE = re.compile(r"^[A-Z]{1,2}\d[A-Z\d]?\s*\d?[A-Z]{0,2}$")
+
+
+def short_name(name):
+    """A compact DISPLAY form of a canonical property name for cramped spots (sparkline cards, recents, phones):
+    "Flat 12, Example Court, 1 Sample Street, London, SE1 1AA" -> "Flat 12, Example Court".
+    Presentation only: never stored, never used for matching, exports or evidence."""
+    parts = [p.strip() for p in (name or "").split(",") if p.strip()]
+    if len(parts) <= 2:
+        return ", ".join(parts)
+    second = parts[1]
+    if second.lower() == "london" or _POSTCODE.match(second.upper()):
+        return parts[0]
+    return f"{parts[0]}, {second}"
+
+
+# SQL form of is_managed() for queries that join `properties p`: the explicit flag OR a fee percentage.
+MANAGED_SQL = "(COALESCE(p.is_managed,0)=1 OR COALESCE(p.management_fee_pct,0)>0)"
+
+
+def is_managed(prop):
+    """True for a property managed for an owner. Decided by the explicit flag OR a fee percentage, so a managed property
+    whose percentage is not known yet (never invented) is still managed."""
+    keys = prop.keys() if hasattr(prop, "keys") else []
+    return bool(prop["management_fee_pct"]) or ("is_managed" in keys and bool(prop["is_managed"]))
+
+
+def fee_text(prop):
+    pct = prop["management_fee_pct"]
+    return f"{pct:g}% fee" if pct else "fee % not set"
+
+
+def get_properties(conn, active_only=True, include_overhead=True, period=None, strict=False):
+    """Properties to list. Three meanings of "active", never confused:
+      strict=True        only properties that are active NOW (current portfolio: targets, new-document matching);
+      period=(start,end) active now PLUS inactive ones that recorded activity in that period (a historical view still shows them);
+      default            active now PLUS inactive ones that have any history (selectable in a filter/dropdown)."""
+    q = "SELECT * FROM properties"
+    clauses = []
+    params = []
+    if active_only and strict:
+        clauses.append("active = 1")
+    elif active_only:
+        if period:
+            data = ("EXISTS (SELECT 1 FROM transactions t WHERE t.property_id = properties.id AND t.date >= ? AND t.date < ?) OR "
+                    "EXISTS (SELECT 1 FROM bookings b WHERE b.property_id = properties.id AND b.check_in < ? AND b.check_out > ?)")
+            params += [period[0], period[1], period[1], period[0]]
+        else:
+            data = ("EXISTS (SELECT 1 FROM transactions t WHERE t.property_id = properties.id) OR "
+                    "EXISTS (SELECT 1 FROM bookings b WHERE b.property_id = properties.id)")
+        clauses.append(f"(active = 1 OR {data})")
+    if not include_overhead:
+        clauses.append("type != 'overhead'")
+    if clauses:
+        q += " WHERE " + " AND ".join(clauses)
+    q += " ORDER BY (type = 'overhead'), name"
+    return conn.execute(q, params).fetchall()
+
+
+def get_property(conn, property_id):
+    return conn.execute("SELECT * FROM properties WHERE id = ?", (property_id,)).fetchone()
+
+
+def yoy_pairs(conn, property_id, current_period):
+    """[(label, this_year, last_year, delta_pct), ...] for every month up to
+    current_period where the same month exists a year earlier too."""
+    series = {(s["year"], s["month"]): s for s in kpis.monthly_series(conn, property_id)}
+    pairs = []
+    for (year, month), row in sorted(series.items()):
+        if (year, month) > current_period:
+            continue
+        prev = series.get((year - 1, month))
+        if prev:
+            pairs.append({
+                "label": f"{MONTH_NAMES[month]} {year}",
+                "this_year": row["revenue"],
+                "last_year": prev["revenue"],
+                "delta_pct": pct_delta(row["revenue"], prev["revenue"], min_base=100),
+            })
+    return pairs
+
+
+def adjusted_yoy_pairs(conn, property_id, current_period):
+    """yoy_pairs(), but built from adjusted_monthly_series() -- revenue here
+    means what this business actually earns, matching the adjusted Revenue
+    tile rather than the flat's full gross revenue."""
+    series = {(s["year"], s["month"]): s for s in kpis.adjusted_monthly_series(conn, property_id)}
+    pairs = []
+    for (year, month), row in sorted(series.items()):
+        if (year, month) > current_period:
+            continue
+        prev = series.get((year - 1, month))
+        if prev:
+            pairs.append({
+                "label": f"{MONTH_NAMES[month]} {year}",
+                "this_year": row["revenue"],
+                "last_year": prev["revenue"],
+                "delta_pct": pct_delta(row["revenue"], prev["revenue"], min_base=100),
+            })
+    return pairs
+
+
+def tiles_for(conn, property_id, year, month):
+    py, pm = kpis.prior_month(year, month)
+    start, end = kpis.month_bounds(year, month)
+    pstart, pend = kpis.month_bounds(py, pm)
+    cur = kpis.kpi_snapshot(conn, property_id, start, end)
+    prev = kpis.kpi_snapshot(conn, property_id, pstart, pend)
+    tiles = [
+        {"label": f"Revenue — {MONTH_NAMES[month]} {year}", "value": f"£{cur['revenue']:,.0f}",
+         "delta": pct_delta(cur["revenue"], prev["revenue"], min_base=100)},
+        {"label": "Net profit", "value": f"£{cur['net_profit']:,.0f}",
+         "delta": pct_delta(cur["net_profit"], prev["net_profit"], min_base=300)},
+        {"label": "Occupancy", "value": f"{cur['occupancy'] * 100:.0f}%",
+         "delta": pct_delta(cur["occupancy"], prev["occupancy"], min_base=0.05)},
+        {"label": "Booked nights", "value": cur["booked_nights"],
+         "delta": pct_delta(cur["booked_nights"], prev["booked_nights"], min_base=2)},
+    ]
+    return tiles, cur, prev
+
+
+CHANNELS = {"airbnb": "Airbnb", "booking": "Booking.com", "direct": "Direct", "vrbo": "Vrbo", "other": "Other"}
+
+
+def channel_key(platform):
+    """Collapses the free-text platform on a booking to one of CHANNELS."""
+    p = (platform or "").lower().replace(".", "").replace("_", "").replace(" ", "")
+    if "airbnb" in p:
+        return "airbnb"
+    if "booking" in p:
+        return "booking"
+    if "direct" in p:
+        return "direct"
+    if "vrbo" in p or "homeaway" in p:
+        return "vrbo"
+    return "other"
+
+
+def gbp0(v):
+    """Whole-pound money that never prints a negative zero: -0.3 reads £0, not £-0 or −£0."""
+    r = round(v)
+    return ("−" if r < 0 else "") + f"£{abs(r):,.0f}"
+
+
+def pct0(v):
+    """A 0-1 share as a whole percentage that never prints -0%."""
+    r = round(v * 100)
+    return ("−" if r < 0 else "") + f"{abs(r):.0f}%"

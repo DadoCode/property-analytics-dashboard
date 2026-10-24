@@ -1,0 +1,75 @@
+{# Period · Property · Compare -- same position on every analytical page. #}
+<div class="context-bar{{ ' has-title' if (bar_title or bar_crumb) }}" x-data="{ open: null }">
+  {% if bar_crumb and prop %}<nav class="bar-crumb" aria-label="Breadcrumb"><a href="{{ cx('properties.index') }}">Properties</a><span class="sep" aria-hidden="true">/</span><span aria-current="page" title="{{ prop.name }}">{{ prop.name|short }}</span></nav>{% endif %}
+  {% if bar_title %}<h1 class="bar-title">{{ bar_title }}</h1>{% endif %}
+  {% if bar_sub %}<span class="bar-sub">{{ bar_sub }}</span>{% endif %}
+  {% if bar_period_seg %}
+    {% set period_views = {'this_month': 'Month', 'ytd': 'YTD', 'accounting_period': 'Accounting'} %}
+    {# Which view is showing, read from the range itself (the URL always carries from/to, so the "choice" is never ytd/accounting here): any single month is Month; the YTD or Accounting range exactly is that view. Nothing about the range is altered. #}
+    {% set cur_from = ctx.from_input ~ '-01' %}{% set cur_to = ctx.to_input ~ '-01' %}
+    {% set ytd_p = (ctx.shortcuts|selectattr('key', 'equalto', 'ytd')|first).params %}
+    {% set acc_p = (ctx.shortcuts|selectattr('key', 'equalto', 'accounting_period')|first).params %}
+    {% set active_view = 'this_month' if cur_from == cur_to else ('ytd' if ytd_p['from'] == cur_from and ytd_p['to'] == cur_to else ('accounting_period' if acc_p['from'] == cur_from and acc_p['to'] == cur_to else '')) %}
+    <div class="seg bar-seg" role="group" aria-label="Period view">
+      {% for s in ctx.shortcuts if s.key in period_views %}
+        <a class="{{ 'on' if s.key == active_view else '' }}" aria-current="{{ 'true' if s.key == active_view else 'false' }}"
+           href="?{{ {'from': s.params['from'], 'to': s.params['to'], 'property': ctx.property_id or 'all', 'compare': ctx.compare}|urlencode }}">{{ period_views[s.key] }}</a>
+      {% endfor %}
+    </div>
+  {% endif %}
+  <div class="context-item">
+    <button type="button" class="context-trigger" @click="open = open === 'period' ? null : 'period'">
+      {{ ctx.display }}<span class="caret">▾</span>
+    </button>
+    <div class="context-pop" x-show="open === 'period'" @click.outside="open = null" x-cloak>
+      {% for s in ctx.shortcuts if s.key != 'custom' %}
+        {# Year to date defaults to a year-over-year comparison -- "prior
+           period" would mean the months right before January, which isn't
+           what "how's this year going vs last year" means. #}
+        <a href="?{{ {'from': s.params['from'], 'to': s.params['to'], 'property': ctx.property_id or 'all', 'compare': ('previous_year' if s.key == 'ytd' and ctx.choice != 'ytd' else ctx.compare)}|urlencode }}"
+           class="context-option {{ 'sel' if s.key == ctx.choice else '' }}">{{ s.label }}</a>
+      {% endfor %}
+      <form method="get" style="padding:8px 10px; border-top:1px solid var(--line); margin-top:4px; display:flex; flex-direction:column; gap:6px">
+        <span class="note">Custom range</span>
+        <div style="display:flex; gap:6px">
+          <input type="month" id="ctx-from" aria-label="From month" value="{{ ctx.from_input }}" style="width:120px">
+          <input type="month" id="ctx-to" aria-label="To month" value="{{ ctx.to_input }}" style="width:120px">
+        </div>
+        <input type="hidden" name="from" id="ctx-from-h"><input type="hidden" name="to" id="ctx-to-h">
+        <input type="hidden" name="property" value="{{ ctx.property_id or 'all' }}"><input type="hidden" name="compare" value="{{ ctx.compare }}">
+        <button type="submit" class="secondary" onclick="document.getElementById('ctx-from-h').value=document.getElementById('ctx-from').value+'-01';document.getElementById('ctx-to-h').value=document.getElementById('ctx-to').value+'-01';">Apply</button>
+      </form>
+    </div>
+  </div>
+  {% if not fixed_property and not hide_property %}
+  <div class="context-item">
+    <button type="button" class="context-trigger" @click="open = open === 'property' ? null : 'property'">
+      {% if viewing %}<span title="{{ viewing.name }}">{{ viewing.name|short }}</span>{% else %}All properties{% endif %}<span class="caret">▾</span>
+    </button>
+    <div class="context-pop" x-show="open === 'property'" @click.outside="open = null" x-cloak>
+      <a href="?{{ {'from': ctx.from_input + '-01', 'to': ctx.to_input + '-01', 'property': 'all', 'compare': ctx.compare}|urlencode }}"
+         class="context-option {{ 'sel' if not ctx.property_id else '' }}">All properties</a>
+      {% for p in all_properties if p.type != 'overhead' %}
+        <a href="?{{ {'from': ctx.from_input + '-01', 'to': ctx.to_input + '-01', 'property': p.id, 'compare': ctx.compare}|urlencode }}"
+           class="context-option {{ 'sel' if ctx.property_id == p.id else '' }}" title="{{ p.name }}">{{ p.name|short }}</a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+  {% if not hide_compare %}
+  <div class="context-item">
+    <button type="button" class="context-trigger" @click="open = open === 'compare' ? null : 'compare'">
+      <span class="ctx-key">Compare:</span> {{ ctx.compare_display or 'None' }}<span class="caret">▾</span>
+    </button>
+    <div class="context-pop" x-show="open === 'compare'" @click.outside="open = null" x-cloak>
+      {% for c in ctx.compare_choices %}
+        <a href="?{{ {'from': ctx.from_input + '-01', 'to': ctx.to_input + '-01', 'property': ctx.property_id or 'all', 'compare': c.key}|urlencode }}"
+           class="context-option {{ 'sel' if c.key == ctx.compare else '' }}">{{ c.label }}</a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+  {% set wbp = workbook_provenance(ctx) %}
+  {% if wbp %}<a class="note ctx-stamp" style="text-decoration:none" href="{{ url_for('imports.batch', batch_id=wbp.id) }}" title="Import #{{ wbp.id }} · {{ wbp.filename }}">Updated from workbook · {{ wbp.applied_at[8:10]|int }} {{ ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][wbp.applied_at[5:7]|int - 1] }} {{ wbp.applied_at[:4] }}</a>{% endif %}
+  {% if not ctx.is_latest %}<a class="ctx-reset" href="?{{ ctx.latest_params|urlencode }}" title="Back to the current month, all properties, default comparison">Reset to latest</a>{% endif %}
+</div>

@@ -1,0 +1,368 @@
+{% extends "base.html" %}
+{% from "_components.html" import pname %}
+{% block title %}{{ doc.filename }} — Fernhill Stays{% endblock %}
+{% block body_class %}wide{% endblock %}
+
+{% block content %}
+{% macro viewer_pane() %}
+  <div class="rv-viewer">
+    <div class="rv-viewer-bar">
+      <span class="rv-viewer-title" title="{{ doc.filename }}">{{ doc.filename }}</span>
+      <span class="rv-viewer-tools">
+        {% if is_pdf %}
+          <button type="button" class="secondary" data-viewer="prev" aria-label="Previous page" title="Previous page">‹</button>
+          <button type="button" class="secondary" data-viewer="next" aria-label="Next page" title="Next page">›</button>
+        {% endif %}
+        {% if is_pdf or is_image %}
+          <button type="button" class="secondary" data-viewer="out" aria-label="Zoom out" title="Zoom out">−</button>
+          <button type="button" class="secondary" data-viewer="in" aria-label="Zoom in" title="Zoom in">+</button>
+          <span id="viewer-label" class="note" aria-live="polite"></span>
+        {% endif %}
+        <a class="btn secondary" href="{{ url_for('documents.file', doc_id=doc.id) }}" target="_blank" title="Open the original in a new tab">Open file</a>
+      </span>
+    </div>
+    {% if is_pdf %}
+      <div id="viewer" class="rv-frame" data-type="pdf" data-src="{{ url_for('documents.file', doc_id=doc.id) }}" data-focus-page="{{ focus.source_page if focus and focus.source_page else '' }}"></div>
+    {% elif is_image %}
+      <div id="viewer" class="rv-frame rv-scroll" data-type="image"><img src="{{ url_for('documents.file', doc_id=doc.id) }}" alt="{{ doc.filename }}" style="width:100%"></div>
+    {% elif preview %}
+      <div id="preview-scroll" class="rv-frame rv-scroll" data-focus-row="{{ focus.source_row if focus and focus.source_row else '' }}">
+        <table class="rv-preview">
+          <tbody>
+            {% for r in preview %}
+              <tr data-r="{{ loop.index }}"><th>{{ loop.index }}</th>{% for c in r %}<td>{{ c }}</td>{% endfor %}</tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="rv-frame rv-nopreview">
+        <div>
+          <p>No inline preview for this file type.</p>
+          <a class="btn secondary" href="{{ url_for('documents.file', doc_id=doc.id) }}" target="_blank">Open {{ doc.filename }}</a>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+{% endmacro %}
+
+{% macro src_link(it) %}
+  {% if it.source_page %}<a href="#" class="src-link" data-page="{{ it.source_page }}">Source: page {{ it.source_page }}</a>
+  {% elif it.source_row %}<a href="#" class="src-link" data-src-row="{{ it.source_row }}">Source: row {{ it.source_row }}</a>{% endif %}
+{% endmacro %}
+
+{% macro fact(label, value, money=False) -%}
+  <div class="fx"><dt>{{ label }}</dt><dd>{% if value is none or value == '' %}<span class="fx-none">—</span>{% elif money %}{{ value|money2 }}{% else %}{{ value }}{% endif %}</dd></div>
+{%- endmacro %}
+
+{% set st_cls = 'st-review' if view.state == 'review' else 'st-pass' if view.state == 'reviewed' else 'st-nc' %}
+<div class="dr">
+  <header class="dr-head">
+    <div class="dr-crumb"><a href="{{ url_for('documents.index') }}">&larr; Documents</a>
+      {% if queue.n > 1 %}<span class="dr-queue" role="group" aria-label="Move through the list">
+        {% if queue.prev %}<a href="{{ url_for('documents.review', doc_id=queue.prev) }}" aria-label="Previous document" title="Previous">‹</a>{% else %}<span class="dr-off" aria-hidden="true">‹</span>{% endif %}
+        <span>{{ queue.pos }} of {{ queue.n }}</span>
+        {% if queue.next %}<a href="{{ url_for('documents.review', doc_id=queue.next) }}" aria-label="Next document" title="Next">›</a>{% else %}<span class="dr-off" aria-hidden="true">›</span>{% endif %}
+      </span>{% endif %}
+    </div>
+    <div class="dr-titlebar">
+      <h1 class="dr-title" title="{{ doc.filename }}">{{ doc.filename }}</h1>
+      <span class="st {{ st_cls }}"><i aria-hidden="true">{{ view.glyph }}</i> {{ view.state_label }}</span>
+      <span class="dc-label">Evidence only</span>
+    </div>
+    <p class="dr-sub">{{ doc_type_label }} · {% if view.property_text %}{{ view.property_text|short }}{% else %}Property not linked{% endif %} · {{ period_label or 'Period not confirmed' }}</p>
+  </header>
+
+  <div class="rv-split">
+    {{ viewer_pane() }}
+
+    <aside class="dr-insp" aria-label="Document details">
+
+      <section class="dr-sec" aria-labelledby="s-doc">
+        <h2 id="s-doc">Document</h2>
+        <dl class="fxg">
+          {{ fact('Type', doc_type_label) }}
+          <div class="fx"><dt>Property</dt><dd>{% if view.property_text %}<span title="{{ view.property_text }}">{{ view.property_text|short }}</span>{% else %}<span class="fx-warn">Property not linked</span>{% endif %}
+            {% if strip.property_how and view.property_text %}<span class="fx-sub">{{ 'Chosen at upload' if strip.property_how == 'selected' else strip.property_how }}</span>{% endif %}</dd></div>
+          <div class="fx"><dt>Period</dt><dd>{% if period_label %}{{ period_label }}{% else %}<span class="fx-warn">Period not confirmed</span>{% endif %}
+            {% if strip.period_how and period_label %}<span class="fx-sub">{{ strip.period_how }}</span>{% endif %}</dd></div>
+          {{ fact('Uploaded', fdate(doc.uploaded_at[:10])) }}
+        </dl>
+        {% if unmatched and not confirmed %}
+          <div class="dr-map">
+            <div class="dr-map-h">Match listings to your properties</div>
+            <p class="dr-hint">These reservations use listing names that don't match a property yet. Choose once per listing; it's remembered for future statements. Pick "Not one of mine" to leave a listing out.</p>
+            {% for u in unmatched %}
+              <form method="post" action="{{ url_for('documents.map_listing', doc_id=doc.id) }}" class="dr-map-row">
+                <input type="hidden" name="listing" value="{{ u.listing }}">
+                <span class="truncate" title="{{ u.listing }}">{{ u.listing }} <span class="note">· {{ u.n }} reservation{{ 's' if u.n != 1 }}</span></span>
+                <select name="property_id" required aria-label="Property for {{ u.listing }}">
+                  <option value="">Choose…</option>
+                  {% for p in flats %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+                  <option value="__ignore__">Not one of mine — leave out</option>
+                </select>
+                <button type="submit" class="secondary">Apply</button>
+              </form>
+            {% endfor %}
+          </div>
+        {% endif %}
+      </section>
+
+      <section class="dr-sec" aria-labelledby="s-facts">
+        <h2 id="s-facts">Extracted facts</h2>
+        {% if lines %}
+          {% if lines|length == 1 %}
+            {% set l = lines[0] %}
+            <dl class="fxg">
+              {% if l.res %}
+                {{ fact('Platform', l.platform) }}
+                {{ fact('Check-in', l.date) }}
+                {{ fact('Check-out', l.to) }}
+                {{ fact('Net amount', l.amount, true) }}
+                {{ fact('Reference', l.reference) }}
+              {% else %}
+                {{ fact('Supplier', l.title) }}
+                {{ fact('Date', l.date) }}
+                {{ fact('Amount', l.amount, true) }}
+                {{ fact('Reference', l.reference) }}
+                {{ fact('Category', l.category) }}
+              {% endif %}
+            </dl>
+            {% if l.desc %}<p class="fx-line">{{ l.desc }}</p>{% endif %}
+            <p class="fx-src">{{ src_link(items[0].row) }}</p>
+          {% else %}
+            <dl class="fxg">
+              {{ fact('Extracted total', strip.extracted_total, true) }}
+              {{ fact('Lines', strip.rows) }}
+              {% if strip.included != strip.rows %}{{ fact('Included', strip.included) }}{% endif %}
+              {% if strip.income and strip.expense %}{{ fact('Costs / income', (strip.expense|money2) ~ ' / ' ~ (strip.income|money2)) }}{% endif %}
+            </dl>
+            <ul class="fx-lines">
+              {% for l in lines %}{% set it = items[loop.index0].row %}
+                <li id="item-{{ l.id }}" class="{{ '' if l.included else 'is-out' }} {{ 'focus-row' if focus and focus.id == l.id }}">
+                  <span class="fl-main">{{ l.title or '—' }}{% if l.desc %}<span class="fl-sub">{{ l.desc }}</span>{% endif %}<span class="fl-sub">{% if l.res %}{% if l.platform %}{{ l.platform|title }} · {% endif %}{{ l.date or '—' }} → {{ l.to or '—' }}{% else %}{{ l.date or '—' }}{% if l.category %} · {{ l.category }}{% endif %}{% endif %}{% if l.reference %} · {{ l.reference }}{% endif %}{% if not l.included %} · left out{% endif %}</span></span>
+                  <span class="fl-amt">{% if l.amount is not none %}{{ l.amount|money2 }}{% else %}<span class="fx-none">—</span>{% endif %}<span class="fl-sub">{{ src_link(it) }}</span></span>
+                </li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+          {% if strip.confidence is not none %}
+            <p class="fx-conf">Confidence {{ strip.confidence }}%{% if strip.low_confidence %} · {{ strip.low_confidence }} line{{ 's' if strip.low_confidence != 1 }} below 70%{% endif %}</p>
+          {% endif %}
+        {% else %}
+          <p class="dr-none">No structured facts extracted. The file is still retained as evidence.</p>
+        {% endif %}
+
+        {% if items and not confirmed %}
+          <details class="rv-edit">
+            <summary>Correct extracted values</summary>
+            <form method="post" action="{{ url_for('documents.confirm', doc_id=doc.id) }}" id="review-form" data-kind="{{ 'res' if res_mode else 'tx' }}">
+              <div class="rv-head">
+                <label class="rv-selectall"><input type="checkbox" id="select-all"> <span id="rv-total" class="note"></span></label>
+                <label class="note"><input type="checkbox" id="only-attention"> Only lines needing attention</label>
+              </div>
+              <div id="bulk-bar" class="rv-bulk" hidden>
+                <strong id="bulk-count"></strong>
+                <select id="bulk-property" aria-label="Set property for selected lines"><option value="">Set property…</option>{% for p in flats %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select>
+                {% if not res_mode %}
+                  <select id="bulk-category" aria-label="Set category for selected lines"><option value="">Set category…</option>{% for c in categories %}<option value="{{ c }}">{{ c|replace('_', ' ')|title }}</option>{% endfor %}</select>
+                  <button type="button" class="secondary" data-bulk="opex">Mark opex</button>
+                  <button type="button" class="secondary" data-bulk="capex">Mark capex</button>
+                {% endif %}
+                <button type="button" class="secondary" data-bulk="exclude">Exclude</button>
+                <button type="button" class="secondary" data-bulk="restore">Restore</button>
+              </div>
+
+              {% for v in items %}{% set it = v.row %}
+                {% set date_ok = it.date and it.date|length == 10 %}
+                <div class="rv-row" data-row data-conf="{{ it.confidence if it.confidence is not none else '' }}"
+                     data-orig='{{ v.orig|tojson }}' data-dup="{{ 1 if v.dup else 0 }}"
+                     data-page="{{ it.source_page or '' }}" data-src-row="{{ it.source_row or '' }}"
+                     {% if not res_mode and not date_ok %}data-date-guess="{{ year }}-{{ '%02d'|format(month) }}-01"{% endif %}>
+                  <input type="hidden" name="item_id" value="{{ it.id }}">
+                  <input type="checkbox" class="row-include" name="include" value="{{ it.id }}" hidden {{ 'checked' if v.include }}>
+
+                  <div class="rv-main">
+                    <input type="checkbox" class="row-select" aria-label="Select this line">
+                    <span class="rv-status ok">✓</span>
+                    {% if res_mode %}
+                      <span class="rv-title">{{ it.description or 'Reservation' }}{% if it.check_in and it.check_out %}<span class="note"> · {{ it.check_in }} → {{ it.check_out }}</span>{% endif %}</span>
+                      <span class="rv-amount"><span class="note">You receive £</span><input class="q" name="net" type="number" step="0.01" value="{{ it.net_revenue if it.net_revenue is not none else '' }}" aria-label="Net amount"></span>
+                    {% else %}
+                      <input class="q rv-title" name="description" value="{{ it.description or '' }}" placeholder="Description" aria-label="Description">
+                      <span class="rv-amount">£<input class="q" name="amount" type="number" step="0.01" value="{{ it.amount if it.amount is not none else '' }}" aria-label="Amount"></span>
+                    {% endif %}
+                  </div>
+
+                  {% if res_mode %}
+                    <div class="rv-fields">
+                      <select class="q row-property" name="property_id" aria-label="Property">
+                        <option value="">Choose property…</option>
+                        {% for p in flats %}<option value="{{ p.id }}" {{ 'selected' if p.id == it.property_id }}>{{ p.name }}</option>{% endfor %}
+                      </select>
+                      <input class="q" name="platform" value="{{ it.platform if it.platform is not none else '' }}" placeholder="Platform" style="width:96px" aria-label="Platform">
+                      <input class="q" name="reservation_id" value="{{ it.reservation_id if it.reservation_id is not none else '' }}" placeholder="Reservation ID" style="width:120px" aria-label="Reservation ID">
+                      <input class="q" type="date" name="check_in" value="{{ it.check_in if it.check_in is not none else '' }}" aria-label="Check-in">
+                      <input class="q" type="date" name="check_out" value="{{ it.check_out if it.check_out is not none else '' }}" aria-label="Check-out">
+                      <input class="q" name="gross" type="number" step="0.01" placeholder="Gross £" value="{{ it.gross_revenue if it.gross_revenue is not none else '' }}" style="width:90px" aria-label="Gross">
+                      <input class="q" name="fees" type="number" step="0.01" placeholder="Fees £" value="{{ it.platform_fees if it.platform_fees is not none else '' }}" style="width:80px" aria-label="Fees">
+                    </div>
+                  {% else %}
+                    <div class="rv-fields">
+                      <select class="q row-property" name="property_id" aria-label="Property">
+                        <option value="">Choose property…</option>
+                        {% for p in flats %}<option value="{{ p.id }}" {{ 'selected' if p.id == it.property_id }}>{{ p.name }}</option>{% endfor %}
+                      </select>
+                      <input class="q" name="vendor" value="{{ it.vendor or '' }}" placeholder="Vendor" style="width:120px" aria-label="Vendor">
+                      <select class="q row-category" name="category" aria-label="Category">
+                        {% for c in categories %}<option value="{{ c }}" {{ 'selected' if it.category == c }}>{{ c|replace('_', ' ')|title }}</option>{% endfor %}
+                      </select>
+                      <select class="q" name="type" aria-label="Opex or capex">
+                        <option value="opex" {{ 'selected' if not it.capex }}>Opex</option>
+                        <option value="capex" {{ 'selected' if it.capex }}>Capex</option>
+                      </select>
+                      <input class="q" type="date" name="date" value="{{ it.date if date_ok else year ~ '-' ~ ('%02d'|format(month)) ~ '-01' }}" aria-label="Date">
+                    </div>
+                  {% endif %}
+
+                  <div class="rv-foot">
+                    <span class="rv-flags"></span>
+                    {% if v.orig.note %}<span class="note">{{ v.orig.note }}</span>{% endif %}
+                    {% if v.excel_overlap %}<span class="note" style="color:var(--warn)">Excel has {{ it.check_in[:7] }} for this property — stored, figures unchanged until reconciled</span>{% endif %}
+                    {% if v.orig.status %}<span class="note">Source status: <strong>{{ v.orig.status }}</strong>{% if v.orig.status_note %} — left unticked{% endif %}</span>{% endif %}
+                    {% if v.orig.po_note or v.orig.order_id %}<span class="note">{% if v.orig.order_id %}Order {{ v.orig.order_id }}{% endif %}{% if v.orig.po_note %} · {{ v.orig.po_note }}{% endif %}</span>{% endif %}
+                    <span class="rv-foot-right">
+                      {{ src_link(it) }}
+                      <button type="button" class="quiet row-toggle">Exclude</button>
+                    </span>
+                  </div>
+                </div>
+              {% endfor %}
+              <p class="dr-hint">Corrections stay on this document as evidence. They are saved when you mark it reviewed, and never change your figures.</p>
+            </form>
+          </details>
+        {% endif %}
+      </section>
+
+      <section class="dr-sec" aria-labelledby="s-link">
+        <h2 id="s-link">Linked evidence</h2>
+        {% if linked %}
+          <ul class="lk">
+            {% for l in linked %}
+              <li><span class="lk-rel">{{ l.rel }}</span>
+                <a href="#" class="lk-go" hx-get="{{ url_for('expenses.transaction_drawer', tx_id=l.id) if l.kind == 'tx' else url_for('bookings.booking_drawer', booking_id=l.id) }}" hx-target="#drawer" hx-swap="innerHTML">{{ l.text }}</a>
+                <span class="lk-sub">{{ l.sub }}</span></li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="dr-none">No linked financial record.</p>
+        {% endif %}
+        {% if overlap and overlap.lines and not confirmed %}
+          <p class="dr-hint">{{ overlap.lines }} reservation{{ 's' if overlap.lines != 1 }} fall in months your Excel history already covers. These are kept as supporting evidence only. They never change the dashboard's figures.</p>
+        {% endif %}
+        {% if confirmed and summary and summary.added %}
+          <div class="rv-success">
+            <div class="rv-success-title">✓ {{ summary.added }} {{ summary.noun }}{{ 's' if summary.added != 1 }} added (an earlier version of the app posted these)</div>
+            <div class="note">{% if summary.excluded %}{{ summary.excluded }} excluded{% endif %}{% if summary.excluded and summary.corrected %} · {% endif %}{% if summary.corrected %}{{ summary.corrected }} manually corrected{% endif %}{% if not summary.excluded and not summary.corrected %}Imported exactly as read.{% endif %}</div>
+            <form method="post" action="{{ url_for('documents.undo', doc_id=doc.id) }}" onsubmit="return confirm('Undo this import? The transactions/reservations it created will be removed and the document goes back to needs-review.')">
+              <button type="submit" class="danger">Undo this import</button>
+            </form>
+          </div>
+        {% endif %}
+        {% if kpi_changes %}
+          <details class="dr-more"><summary>Figures that moved when this was confirmed</summary>
+            <table class="dr-tbl"><thead><tr><th>Property · period</th><th class="num">Revenue</th><th class="num">Costs</th><th class="num">Nights</th></tr></thead><tbody>
+              {% for k in kpi_changes %}<tr><td>{{ k.property }} · {{ k.period }}</td><td class="num">{{ k.before.revenue|money2 }} → {{ k.after.revenue|money2 }}</td><td class="num">{{ k.before.costs|money2 }} → {{ k.after.costs|money2 }}</td><td class="num">{{ k.before.booked_nights }} → {{ k.after.booked_nights }}</td></tr>{% endfor %}
+            </tbody></table></details>
+        {% endif %}
+      </section>
+
+      <section class="dr-sec" aria-labelledby="s-rev">
+        <h2 id="s-rev">Review</h2>
+        {% if confirmed %}
+          <p class="dr-state"><span class="st st-pass"><i aria-hidden="true">✓</i> Reviewed</span></p>
+          <div class="rv-success"><div class="rv-success-title">✓ Kept as supporting evidence</div>
+            <div class="note">Nothing was added to your figures. The monthly workbook is the source.{% if summary and summary.excluded %} {{ summary.excluded }} line{{ 's' if summary.excluded != 1 }} left out.{% endif %}</div></div>
+          {% if not (summary and summary.added) %}
+            <form method="post" action="{{ url_for('documents.undo', doc_id=doc.id) }}" class="dr-act"><button type="submit" class="secondary">Reopen for review</button></form>
+          {% endif %}
+        {% else %}
+          <p class="dr-state"><span class="st {{ st_cls }}"><i aria-hidden="true">{{ view.glyph }}</i> {{ view.state_label }}</span></p>
+          {% if doc.status == 'failed' %}
+            <p class="dr-why"><strong>Couldn't read this automatically.</strong> {{ doc.failure_reason or 'Nothing could be read from this file.' }}{% if needs_ai and not extraction_available %} (Automatic extraction isn't configured, and this type of file needs it.){% endif %}</p>
+          {% endif %}
+          {% if view.reasons %}
+            <ul class="dr-reasons">{% for r in view.reasons if not (doc.status == 'failed' and r == "Couldn't read automatically") %}<li>{{ r }}</li>{% endfor %}</ul>
+          {% else %}
+            <p class="dr-hint">Nothing was flagged. Check the facts against the file, then mark it reviewed.</p>
+          {% endif %}
+          {% for w in warnings %}
+            <p class="dr-warn {{ 'is-info' if w.level != 'warn' }}">{{ w.message }}{% if w.document_id %} <a href="{{ url_for('documents.review', doc_id=w.document_id) }}">Open the earlier upload</a>{% endif %}</p>
+          {% endfor %}
+          {% if dup_doc and not warnings %}
+            <p class="dr-warn">Possible duplicate of <a href="{{ url_for('documents.review', doc_id=dup_doc.id) }}">{{ dup_doc.filename }}</a> (uploaded {{ dup_doc.uploaded_at[:10] }}).</p>
+          {% endif %}
+          <div class="dr-confirm">
+            {% if items %}
+              <button type="submit" id="confirm-btn" form="review-form">Mark reviewed</button>
+            {% else %}
+              <form method="post" action="{{ url_for('documents.confirm', doc_id=doc.id) }}"><button type="submit" id="confirm-btn">Mark reviewed</button></form>
+            {% endif %}
+            <span id="confirm-note" class="dr-hint">Kept as evidence. Nothing is added to your figures.</span>
+          </div>
+        {% endif %}
+        {% if confirmed %}
+          {% for w in warnings if w.document_id %}
+            <p class="dr-warn is-info">{{ w.message }} <a href="{{ url_for('documents.review', doc_id=w.document_id) }}">Open the earlier upload</a></p>
+          {% endfor %}
+        {% endif %}
+      </section>
+
+      <section class="dr-sec" aria-labelledby="s-src">
+        <h2 id="s-src">Source</h2>
+        <dl class="fxg">
+          {{ fact('File', strip.filename) }}
+          {{ fact('Size', strip.size) }}
+          {{ fact('Read by', strip.method if strip.method else 'As chosen at upload') }}
+        </dl>
+        <p class="dr-links"><a href="{{ url_for('documents.file', doc_id=doc.id) }}" target="_blank">Open the original file</a></p>
+        {% if confirmed and (created.transactions or created.bookings) %}
+          <p class="dr-hint">Records an earlier version of the app created from this file are listed under Linked evidence.</p>
+        {% endif %}
+        <details class="dr-more"><summary>What happened to this file</summary>
+          {% if events %}
+            <ol class="trail">
+              {% for e in events %}
+                <li>
+                  <div><span class="trail-ev trail-{{ e.event }}">{{ e.label }}</span> <span class="note">{{ e.timestamp[:16] }}</span></div>
+                  <div>{{ e.summary }}</div>
+                  {% if e.event == 'edited' and e.detail %}
+                    <details><summary class="note">See what changed</summary>
+                      <ul class="note">{% for d in e.detail %}{% if d.changes is defined %}{% for c in d.changes %}<li>{{ d.line }} · {{ c.field|replace('_', ' ') }}: {{ c['from'] if c['from'] is not none else '—' }} → {{ c.to if c.to is not none else '—' }}</li>{% endfor %}{% endif %}{% endfor %}</ul></details>
+                  {% elif e.event == 'extracted' and e.detail %}
+                    <details><summary class="note">How it decided</summary>
+                      <ul class="note">
+                        <li>Read by {{ e.detail.method }}</li>
+                        <li>Property: {{ e.detail.property.source }}{% if e.detail.property.confidence %} ({{ (e.detail.property.confidence * 100)|round|int }}% name match){% endif %}</li>
+                        {% if e.detail.period %}<li>Period: {{ e.detail.period.source }}{% if e.detail.period.ambiguous %} (spans several months){% endif %}</li>{% endif %}
+                        {% if e.detail.warnings %}<li>Flagged: {{ e.detail.warnings|join(', ')|replace('_', ' ') }}</li>{% endif %}
+                      </ul></details>
+                  {% endif %}
+                </li>
+              {% endfor %}
+            </ol>
+          {% else %}
+            <p class="note m0">No trail was recorded for this file (it was uploaded before ingestion tracking was added).</p>
+          {% endif %}
+        </details>
+        {% if not confirmed %}
+          <form method="post" action="{{ url_for('documents.reject', doc_id=doc.id) }}" onsubmit="return confirm('Delete this draft? The extracted lines and the stored file are removed. Nothing has reached your figures, so no numbers change.')" class="dr-act">
+            <button type="submit" class="quiet-danger" title="Delete this draft and its stored file">Reject / delete draft</button>
+          </form>
+        {% endif %}
+      </section>
+    </aside>
+  </div>
+</div>
+<script src="{{ url_for('static', filename='review.js', v=asset_v) }}"></script>
+{% endblock %}

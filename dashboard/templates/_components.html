@@ -1,0 +1,99 @@
+{# Shared presentation components. Import with:
+   {% from "_components.html" import page_head, section, kpi_tile, delta, pill, empty_state, tabs %} #}
+{% set ICON_PATHS = {'overview': '<rect x="3.5" y="3.5" width="7" height="9" rx="1.6"/><rect x="13.5" y="3.5" width="7" height="5" rx="1.6"/><rect x="13.5" y="11.5" width="7" height="9" rx="1.6"/><rect x="3.5" y="15.5" width="7" height="5" rx="1.6"/>', 'properties': '<path d="M4.5 20.5V5.6c0-.9.7-1.6 1.6-1.6h7.3c.9 0 1.6.7 1.6 1.6v14.9"/><path d="M15 9.5h3c.9 0 1.5.7 1.5 1.5v9.5"/><path d="M3 20.5h18"/><path d="M8 8h3M8 11.5h3M8 15h3"/>', 'bookings': '<rect x="3.5" y="5" width="17" height="15.5" rx="2.6"/><path d="M3.5 10h17M8 3v4M16 3v4"/>', 'expenses': '<path d="M6 3.5h12v17l-3-2-3 2-3-2-3 2z"/><path d="M9 8.5h6M9 12.2h6"/>', 'documents': '<path d="M7.2 3.5h6.6L19 8.7v10.6c0 .9-.7 1.5-1.5 1.5h-10c-.8 0-1.5-.6-1.5-1.5V5c0-.8.7-1.5 1.2-1.5z"/><path d="M13.5 3.5v5.2H19"/>', 'reports': '<path d="M4 4v16h16"/><path d="M8.5 16v-5M12.5 16V8M16.5 16v-3"/>', 'targets': '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r=".7"/>', 'search': '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-3.8-3.8"/>', 'plus': '<path d="M12 5.5v13M5.5 12h13"/>', 'import': '<path d="M12 3.5v11.5M7.5 10.5 12 15l4.5-4.5"/><path d="M4.5 20h15"/>'} %}
+{% macro icon(name, cls="ico") -%}<svg class="{{ cls }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">{{ ICON_PATHS[name]|safe }}</svg>{%- endmacro %}
+
+
+{% macro delta(d, label, invert=False) -%}
+  {%- if d is not none -%}
+    {%- set good = (d > 0) != invert -%}
+    {%- set zero = d|abs < 0.05 -%}
+    <span class="delta {{ 'flat' if zero else ('up' if good else 'down') }}"><span class="arrow">{{ '→' if zero else ('↑' if d > 0 else '↓') }}</span>{{ '%.1f'|format(d|abs) }}% {{ label }}</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{# sparkline_id: opt-in only -- pass a canvas id to reserve a small trend
+   line under the number (the caller draws into it with Chart.js). Leaving
+   it out renders exactly as before, so every existing page that doesn't
+   pass it is unaffected. #}
+{% macro kpi_tile(t, compare='previous_period', compare_label='prior period', invert=False, href=None, hint=None, sparkline_id=None) -%}
+  {# A tile that opens its records is one link. If it also carries a link of its own (a REVIEW flag), the two sit side by side, never nested. #}
+  {% set split = href and t.note_html %}
+  {% if split %}<div class="tile link split{{ ' tile-hero' if t.key == 'company_net_profit' }}"><a href="{{ href }}" title="{{ hint or 'See the detail behind this' }}" class="tile-main">
+  {% elif href %}<a href="{{ href }}" title="{{ hint or 'See the detail behind this' }}" class="tile link{{ ' tile-hero' if t.key == 'company_net_profit' }}">
+  {% else %}<div class="tile{{ ' tile-hero' if t.key == 'company_net_profit' }}">{% endif %}
+    <div class="label">{{ t.label }}{% if t.info %}<span class="info-dot" title="{{ t.info }}" tabindex="0" aria-label="{{ t.info }}">ⓘ</span>{% endif %}</div>
+    <div class="value">{{ t.value }}</div>
+    {% if compare == 'previous_period' and t.delta is defined %}{{ delta(t.delta, 'vs ' ~ compare_label, invert) }}
+    {% elif compare == 'previous_year' and t.delta_ly is defined %}{{ delta(t.delta_ly, 'vs ' ~ compare_label, invert) }}{% endif %}
+    {% if t.note %}<div class="note">{{ t.note }}</div>{% endif %}
+    {% if t.note_html and not split %}<div class="note">{{ t.note_html|safe }}</div>{% endif %}
+    {% if sparkline_id %}<div class="tile-spark"><canvas id="{{ sparkline_id }}" aria-hidden="true"></canvas></div>{% endif %}
+  {% if split %}<span class="chev">›</span></a><div class="note tile-flag">{{ t.note_html|safe }}</div></div>
+  {% elif href %}<span class="chev">›</span></a>{% else %}</div>{% endif %}
+{%- endmacro %}
+
+{% macro page_head(title, subtitle=None) -%}
+  <div class="page-head">
+    <div>
+      <h1>{{ title }}</h1>
+      {% if subtitle %}<p class="subtitle">{{ subtitle }}</p>{% endif %}
+    </div>
+    {% if caller is defined %}<div class="page-actions">{{ caller() }}</div>{% endif %}
+  </div>
+{%- endmacro %}
+
+{% macro section(title, note=None, id=None) -%}
+  <section class="section" {% if id %}id="{{ id }}"{% endif %}>
+    <div class="section-head"><h2>{{ title }}</h2>{% if note %}<span class="note">{{ note }}</span>{% endif %}</div>
+    {{ caller() }}
+  </section>
+{%- endmacro %}
+
+{% macro pill(text, kind='') -%}
+  <span class="pill {{ kind }}">{{ text }}</span>
+{%- endmacro %}
+
+{% macro empty_state(title, body, action=None, href=None) -%}
+  <div class="empty">
+    <div class="empty-title">{{ title }}</div>
+    <div class="empty-body">{{ body }}</div>
+    {% if action and href %}<a class="btn secondary" href="{{ href }}">{{ action }}</a>{% endif %}
+  </div>
+{%- endmacro %}
+
+{# items: list of (key, label, href) or (key, label, href, secondary).
+   secondary=True marks an admin/source tab (Documents, Settings) -- a
+   thin divider before the first one and muted styling keep it visually
+   subordinate to the analysis tabs without a second nav bar. #}
+{% macro tabs(items, active) -%}
+  <nav class="tabs">
+    {% set prev_secondary = namespace(value=False) %}
+    {% for item in items %}
+      {% set key, label, href = item[0], item[1], item[2] %}
+      {% set is_secondary = item[3] if item|length > 3 else False %}
+      {% if is_secondary and not prev_secondary.value %}<span class="tabs-divider"></span>{% endif %}
+      {% set prev_secondary.value = is_secondary %}
+      <a href="{{ href }}" class="tab {{ 'active' if key == active else '' }} {{ 'tab-secondary' if is_secondary else '' }}">{{ label }}</a>
+    {% endfor %}
+  </nav>
+{%- endmacro %}
+
+{# Inline progress bar toward a target. pct may exceed 100 (bar caps, colour changes). #}
+{% macro progress(pct) -%}
+  {%- if pct is not none -%}
+    <span class="pbar"><i class="{{ 'over' if pct >= 100 }}" style="width:{{ [pct, 100]|min }}%"></i></span>
+  {%- endif -%}
+{%- endmacro %}
+
+{# Subtle channel marker: a small dot + name, colour from a restrained per-channel palette. #}
+{% macro channel(platform) -%}
+  {%- set k = platform|channel_key -%}
+  <span class="chan"><i class="chan-{{ k }}"></i>{{ CHANNELS[k] if k != 'other' or not platform else platform|replace('_', ' ')|title }}</span>
+{%- endmacro %}
+
+{# A figure that opens the evidence behind it. Quiet by design: same text, a dotted underline, and a clearer one on hover/focus. #}
+{% macro mlink(href, text, label) -%}<a class="mlink" href="{{ href }}" aria-label="{{ label }}">{{ text }}</a>{%- endmacro %}
+
+{# A property name: the full canonical name, plus a compact display form that cramped layouts switch to (CSS only). #}
+{% macro pname(name, always=False) -%}<span class="nm {{ 'nm-always' if always else 'nm-compact' }}"><span class="nm-full">{{ name }}</span><span class="nm-short" aria-hidden="true">{{ name|short }}</span></span>{%- endmacro %}

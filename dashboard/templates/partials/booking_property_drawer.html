@@ -1,0 +1,33 @@
+<div class="drawer-head">
+  <div>
+    <div class="drawer-amount">{{ '—' if r.no_data or r.idle else (r.booked|string ~ ' / ' ~ r.available ~ ' nights') }}</div>
+    <div class="note">{{ name }} · {{ ctx.display }}</div>
+  </div>
+  <button type="button" class="drawer-close" onclick="closeDrawer()" aria-label="Close">&times;</button>
+</div>
+{% if r.idle %}
+  <p class="note" style="margin-top:14px">{{ 'Inactive: its history is kept.' if r.inactive else 'Not active in this period.' }}</p>
+{% elif r.no_data %}
+  <p class="note" style="margin-top:14px">No data imported for this period.</p>
+{% else %}
+  <div class="drawer-section">
+    <div class="drawer-field"><span>Occupancy</span><strong>{{ '%.0f'|format(r.occupancy * 100) }}%</strong></div>
+    <div class="drawer-field"><span>Gross Booking Revenue</span><strong>{{ r.gross|money2 }}</strong></div>
+    <div class="drawer-field"><span>ADR</span><strong>{{ r.adr|money2 }}</strong></div>
+  </div>
+  <div class="drawer-section">
+    <div class="src-state">{% if r.dtype in ('reservations', 'mixed') %}Reservation records{% elif r.dtype == 'monthly' %}Monthly total{% else %}No booking data{% endif %}</div>
+    {% if r.dtype == 'monthly' %}<p class="note m0">Booked nights come from a monthly total, not individual reservations.</p>{% endif %}
+    {% if ev %}
+      {% for i in ev.rows[:6] %}
+        <div class="drawer-field"><span>{{ i.check_in }}{% if not i.aggregate %} → {{ i.check_out }}{% endif %}</span><strong>{{ i.nights }} night{{ 's' if i.nights != 1 }} · {{ 'monthly total' if i.aggregate else 'reservation' }}</strong></div>
+      {% endfor %}
+      {% if ev.rows|length > 6 %}<p class="note m0">+{{ ev.rows|length - 6 }} more</p>{% endif %}
+    {% endif %}
+    {% if r.source and r.source.href %}<div class="drawer-field"><span>Source</span><a href="{{ r.source.href }}">{{ r.source.text }} · open reconciliation</a></div>{% elif r.source %}<div class="drawer-field"><span>Source</span><strong>{{ r.source.text }}</strong></div>{% endif %}
+    {% for f in r.flags %}<p class="note m0" style="color:var(--warn-ink)">{{ f }}</p>{% endfor %}
+  </div>
+{% endif %}
+<div class="drawer-section">
+  <a href="{{ ws() }}">Open this property's Bookings →</a>
+</div>

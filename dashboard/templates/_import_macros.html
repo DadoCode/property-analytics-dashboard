@@ -1,0 +1,125 @@
+{# Number and status formatting for the workbook import pages. Pence are shown: this is where figures are checked. #}
+{# Plain, fixed explanations of the REVIEW checks that carry no stored reason. Nothing here guesses at why a figure happened. #}
+{% set REVIEW_WHY = {'Management fee rate': 'The recorded fee rate differs from the configured rate.',
+                     'Income without booked nights': 'Revenue is recorded while booked nights are zero.',
+                     "Reversal of last month's costs": 'Negative value may represent a reversal or credit.'} %}
+{# What the three statuses mean, in one place, near every import and reconciliation view. #}
+{% macro status_legend() -%}
+  <details class="legend">
+    <summary>What PASS, REVIEW and NO CONTROL mean</summary>
+    <dl>
+      <dt><span class="rc rc-pass">PASS</span></dt><dd>Figures reconcile with the available control.</dd>
+      <dt><span class="rc rc-review">REVIEW</span></dt><dd>Something does not reconcile or needs checking.</dd>
+      <dt><span class="rc rc-nc">NO CONTROL</span></dt><dd>No comparison/control value was provided, so the check cannot be evaluated. This is not a failure.</dd>
+    </dl>
+    <p class="note">If a workbook-controlled figure is wrong, correct the workbook and re-import the month.</p>
+  </details>
+{%- endmacro %}
+{% macro val(v, kind) -%}
+  {%- if v is none -%}—
+  {%- elif kind == 'money' -%}{{ '−' if v|round(2) < 0 }}£{{ '{:,.2f}'.format(v|abs) }}
+  {%- elif kind == 'pct' -%}{{ '%g'|format((v * 100)|round(1) + 0) if ((v * 100)|round(1)) != 0 else '0' }}%
+  {%- else -%}{{ '{:,.0f}'.format(v|abs if v|round(0) == 0 else v) }}{%- endif -%}
+{%- endmacro %}
+{% macro change(a, b, kind) -%}
+  {%- if a is none or b is none -%}
+  {%- else -%}{%- set d = b - a -%}
+    {%- if kind == 'money' -%}{%- if d|abs < 0.005 -%}<span class="note">no change</span>{%- else -%}<span class="{{ 'pos' if d > 0 else 'neg' }}">{{ '+' if d > 0 else '−' }}£{{ '{:,.2f}'.format(d|abs) }}</span>{%- endif -%}
+    {%- elif kind == 'pct' -%}{%- if d|abs < 0.0005 -%}<span class="note">no change</span>{%- else -%}<span class="{{ 'pos' if d > 0 else 'neg' }}">{{ '+' if d > 0 else '−' }}{{ '{:.1f}'.format(d|abs * 100) }} pts</span>{%- endif -%}
+    {%- else -%}{%- if d|abs < 0.5 -%}<span class="note">no change</span>{%- else -%}<span class="{{ 'pos' if d > 0 else 'neg' }}">{{ '+' if d > 0 else '−' }}{{ '{:,.0f}'.format(d|abs) }}</span>{%- endif -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endmacro %}
+{% macro status_pill(status) -%}
+  {%- set m = {'ok': ('pos', 'Ready'), 'review': ('warn', 'Needs review'), 'error': ('neg', 'Blocked'), 'unchanged': ('', 'Already up to date'),
+               'no_activity': ('', 'No activity'), 'missing_sheet': ('warn', 'Sheet missing'), 'not_in_dashboard': ('neg', 'Not in dashboard'),
+               'applied': ('quiet', '✓ Applied'), 'undone': ('', 'Undone'), 'staged': ('warn', 'Not imported yet'), 'new_property': ('brand', 'New property'), 'not_active': ('', 'Not active yet')} -%}
+  <span class="pill {{ m[status][0] if status in m else '' }}">{{ m[status][1] if status in m else status }}</span>
+{%- endmacro %}
+{% macro row_pill(s) -%}
+  <span class="pill {{ {'NEW': 'pos', 'CHANGED': 'warn', 'REMOVED': 'neg', 'UNCHANGED': ''}[s] }}">{{ s }}</span>
+{%- endmacro %}
+{% macro check_pill(s) -%}
+  {%- if s == 'PASS' -%}<span class="rc rc-pass">PASS</span>
+  {%- elif s == 'NO CONTROL' -%}<span class="rc rc-nc" title="The workbook's own total for this figure is blank, so there is nothing to compare against">NO CONTROL</span>
+  {%- else -%}<span class="rc rc-review">{{ s }}</span>{%- endif -%}
+{%- endmacro %}
+
+{# What kind of number a named check is, so a rate is never printed as money. #}
+{% macro kind_of(metric) -%}{{ 'pct' if metric in ('Occupancy', 'Management fee rate') else ('int' if metric in ('Days booked',) else 'money') }}{%- endmacro %}
+
+{# A difference: nothing recedes, something reads. Percentages are in percentage points. #}
+{% macro diffv(d, kind) -%}
+  {%- if d is none -%}<span class="zero">—</span>
+  {%- elif kind == 'pct' -%}{%- if d|abs < 0.0005 -%}<span class="zero">0 pp</span>{%- else -%}<span class="nz">{{ '+' if d > 0 else '−' }}{{ '%g'|format((d|abs * 100)|round(2)) }} pp</span>{%- endif -%}
+  {%- elif kind == 'int' -%}{%- if d|abs < 0.5 -%}<span class="zero">0</span>{%- else -%}<span class="nz">{{ '+' if d > 0 else '−' }}{{ '{:,.0f}'.format(d|abs) }}</span>{%- endif -%}
+  {%- else -%}{%- if d|abs < 0.005 -%}<span class="zero">£0.00</span>{%- else -%}<span class="nz">{{ '+' if d > 0 else '−' }}£{{ '{:,.2f}'.format(d|abs) }}</span>{%- endif -%}
+  {%- endif -%}
+{%- endmacro %}
+
+{# Import-time checks: Check | Workbook | Imported | Difference | Status #}
+{% macro checks_table(rows) -%}
+  <table class="chk"><colgroup><col><col class="cn"><col class="cn"><col class="cn"><col class="cs"></colgroup><thead><tr><th>Check</th><th class="num">Workbook</th><th class="num">Imported</th><th class="num">Difference</th><th>Status</th></tr></thead><tbody>
+    {% for c in rows %}{% set k = kind_of(c.metric) %}
+      <tr><td>{{ c.metric|replace('Net profit (control)', 'Workbook net result (control)')|replace('Operating profit (control)', 'Workbook result before capex (control)') }}{% if c.metric == 'Management fee rate' %}<div class="note">Recorded rate vs the rate configured at import</div>{% endif %}{% if c.status == 'REVIEW' and c.metric in REVIEW_WHY %}<div class="note why">{{ REVIEW_WHY[c.metric] }}</div>{% endif %}{% if c.current %}<div class="cur-note"><span class="cur-label">Current configuration</span> {{ '%g'|format(c.current.configured) }}% · {% if c.current.matches %}<span class="cur-ok">✓ now matches the recorded rate</span>{% else %}still differs from the recorded rate{% endif %} <span class="note">· the result at import time is unchanged</span></div>{% endif %}{% if c.note %}<div class="note">{{ c.note }}</div>{% endif %}</td><td class="num">{{ val(c.workbook, k) }}</td><td class="num">{{ val(c.imported, k) }}</td><td class="num">{{ diffv(c.diff, k) }}</td><td>{{ check_pill(c.status) }}</td></tr>
+    {% endfor %}
+  </tbody></table>
+{%- endmacro %}
+
+{# Live check: Figure | Workbook | Imported ledger | Dashboard | Status #}
+{% macro live_table(rows) -%}
+  <table class="chk"><colgroup><col><col class="cn"><col class="cn"><col class="cn"><col class="cs"></colgroup><thead><tr><th>Figure</th><th class="num">Workbook</th><th class="num">Imported ledger</th><th class="num">Dashboard</th><th>Status</th></tr></thead><tbody>
+    {% for r in rows %}{% set k = kind_of(r.metric) %}
+      <tr><td>{{ r.metric|replace('Net profit (control)', 'Workbook net result (control)')|replace('Operating profit (control)', 'Workbook result before capex (control)') }}{% if r.note %}<div class="note">{{ r.note }}</div>{% endif %}</td><td class="num">{{ val(r.workbook, k) }}</td><td class="num">{{ val(r.ledger, k) }}</td><td class="num">{{ val(r.dashboard, k) }}</td><td>{{ check_pill(r.status) }}</td></tr>
+    {% endfor %}
+  </tbody></table>
+{%- endmacro %}
+
+{# ---- the review workflow's shared pieces ---- #}
+{% macro flow(step) -%}
+  <ol class="imp-flow" aria-label="Import steps">
+    {% for k, label in [('upload', 'Upload'), ('preview', 'Preview'), ('applied', 'Applied')] %}
+      <li class="{{ 'on' if k == step }}"{% if k == step %} aria-current="step"{% endif %}><span class="n" aria-hidden="true">{{ loop.index }}</span>{{ label }}</li>
+    {% endfor %}
+  </ol>
+{%- endmacro %}
+
+{# ✓ PASS · ● REVIEW · ○ NO CONTROL as glyph and word (never a filled badge). #}
+{% macro state(s) -%}
+  {%- if s == 'pass' -%}<span class="st st-pass"><i aria-hidden="true">✓</i> PASS</span>
+  {%- elif s == 'review' -%}<span class="st st-review"><i aria-hidden="true">●</i> REVIEW</span>
+  {%- elif s == 'nocontrol' -%}<span class="st st-nc" title="No comparison value exists for this check. This is not a failure."><i aria-hidden="true">○</i> NO CONTROL</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{# One proportional rail: how clean is this import? Segments filter the property blocks below (script in the page). #}
+{% macro rail(counts, filterable) -%}
+  {% set total = (counts.pass + counts.review + counts.nocontrol) or 1 %}
+  <div class="imp-rail" role="group" aria-label="How the areas in this import check out">
+    <div class="rail-bar">
+      {% for k, label in [('review', 'REVIEW'), ('nocontrol', 'NO CONTROL'), ('pass', 'PASS')] if counts[k] %}
+        {% if filterable %}<button type="button" class="rl rl-imp-{{ k }}" data-state="{{ k }}" style="flex-basis:{{ (counts[k] / total * 100)|round(2) }}%" aria-pressed="false" aria-label="{{ label }}: {{ counts[k] }} of {{ total }}. Show only these."></button>
+        {% else %}<span class="rl rl-imp-{{ k }}" style="flex-basis:{{ (counts[k] / total * 100)|round(2) }}%" role="img" aria-label="{{ label }}: {{ counts[k] }} of {{ total }}"></span>{% endif %}
+      {% endfor %}
+    </div>
+    <div class="rail-key">
+      {% for k, label in [('review', 'REVIEW'), ('nocontrol', 'NO CONTROL'), ('pass', 'PASS')] if counts[k] %}<span><i class="dot dot-imp-{{ k }}" aria-hidden="true"></i>{{ label }} {{ counts[k] }}</span>{% endfor %}
+    </div>
+  </div>
+{%- endmacro %}
+
+{# Is a figure different before and after? ('1' or '') #}
+{% macro differs(a, b, kind) -%}
+  {%- if a is none or b is none -%}
+  {%- else -%}{%- set d = (b - a)|abs -%}{{ '1' if ((kind == 'money' and d >= 0.005) or (kind == 'pct' and d >= 0.0005) or (kind not in ('money', 'pct') and d >= 0.5)) else '' }}{%- endif -%}
+{%- endmacro %}
+
+{# A change as a direction, not four columns: current → after, the signed change, and the exact comparison on hover or focus. #}
+{% macro change_row(label, cur, wb, aft, kind) -%}
+  <div class="chg-row" tabindex="0" role="group" aria-label="{{ label }}: current {{ val(cur, kind) }}, workbook {{ val(wb, kind) if wb is not none else 'blank' }}, after {{ val(aft, kind) }}">
+    <span class="cl">{{ label }}</span>
+    <span class="cv"><span class="was">{{ val(cur, kind) if cur is not none else 'new' }}</span><span class="arr" aria-hidden="true">→</span><span class="now">{{ val(aft, kind) }}</span></span>
+    <span class="cd">{{ change(cur, aft, kind) if cur is not none else '' }}</span>
+    <span class="chg-pop" role="tooltip"><b>Current</b> {{ val(cur, kind) if cur is not none else '—' }}<b>Workbook</b> {{ val(wb, kind) if wb is not none else '—' }}<b>After</b> {{ val(aft, kind) }}<b>Change</b> {{ change(cur, aft, kind) if cur is not none else 'new' }}</span>
+  </div>
+{%- endmacro %}

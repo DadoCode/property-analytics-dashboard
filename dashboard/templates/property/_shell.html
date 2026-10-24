@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% from "_components.html" import tabs, delta %}
+{% block title %}{{ prop.name }} — Fernhill Stays{% endblock %}
+{% block content %}
+  <div class="ws2">
+  {# ---------- identity: the property is named once, here ---------- #}
+  <header class="ws-head">
+    <h1 class="ws-title"><span class="nm-full">{{ prop.name }}</span><span class="nm-short" aria-hidden="true">{{ prop.name|short }}</span></h1>
+    <p class="ws-meta">{{ ws_meta.model }}{% if ws_meta.fee %}<span class="sep">·</span>{{ ws_meta.fee }}{% endif %}<span class="sep">·</span>{% if ws_meta.status == 'Active' %}<span>Active</span>{% else %}<span class="ws-flag">{{ ws_meta.status }}</span>{% endif %}{% if ws_meta.mtd %}<span class="sep">·</span><span>Month to date</span>{% endif %}</p>
+    {% if prop.name != prop.name|short %}<p class="ws-addr">{{ prop.name }}</p>{% endif %}
+  </header>
+
+  {# ---------- the economics strip: this property's headline figures, once, for every tab ---------- #}
+  {% if ws_strip %}
+    {% if ws_strip.cells %}
+      <section class="ws-strip ws-strip-{{ ws_strip.kind }}" aria-label="{{ 'Managed economics' if ws_strip.kind == 'managed' else 'Property economics' }}">
+        {% for c in ws_strip.cells %}
+          {% if c.role == 'fee' %}<span class="ws-arrow" aria-hidden="true">→</span>
+          {% elif c.role == 'costs' %}<span class="ws-op" aria-hidden="true">−</span>
+          {% elif c.role == 'profit' %}<span class="ws-op" aria-hidden="true">=</span>{% endif %}
+          <div class="wc wc-{{ c.role }}">
+            <span class="wc-label">{{ c.label }}{% if c.info %}<span class="info-dot" title="{{ c.info }}" tabindex="0" aria-label="{{ c.info }}">ⓘ</span>{% endif %}</span>
+            {% if c.href %}<a class="wc-value" href="{{ c.href }}" title="{{ c.hint }}">{{ c.value }}</a>{% else %}<span class="wc-value">{{ c.value }}</span>{% endif %}
+            <span class="wc-sub">{% if c.caption %}<span class="wc-cap">{{ c.caption }}</span>{% endif %}{% if c.delta is defined and c.delta is not none and ctx.compare != 'none' %}{{ delta(c.delta, '') }}{% endif %}</span>
+          </div>
+        {% endfor %}
+      </section>
+    {% else %}
+      <p class="ws-empty">{{ 'No data imported for this period.' if ws_strip.empty[0] == 'no_data' else ws_strip.empty[1] }}{% if ws_strip.empty[0] == 'no_data' %} <a href="{{ url_for('imports.index') }}">Import monthly workbook ›</a>{% endif %}</p>
+    {% endif %}
+  {% endif %}
+
+  {% set items = [('overview', 'Overview', cx('properties.detail', property_id=prop.id))] %}
+  {% if not is_overhead %}
+    {% set items = items + [('performance', 'Performance', cx('properties.performance_tab', property_id=prop.id))] %}
+    {# Calendar only shown once there's a real day-level booking to plot -- otherwise it's an empty grid every single time. #}
+    {% if has_calendar_data or active_tab == 'calendar' %}
+      {% set items = items + [('calendar', 'Calendar', cx('properties.calendar_tab', property_id=prop.id))] %}
+    {% endif %}
+    {% set items = items + [('bookings', 'Bookings', cx('properties.bookings', property_id=prop.id))] %}
+  {% endif %}
+  {% set items = items + [('expenses', 'Expenses', cx('properties.expenses_tab', property_id=prop.id))] %}
+  {% set items = items + [('documents', 'Documents', cx('properties.documents_tab', property_id=prop.id), True), ('settings', 'Settings', cx('properties.settings_tab', property_id=prop.id), True)] %}
+  {{ tabs(items, active_tab) }}
+
+  <div class="ws-body">
+    <div class="ws-main" id="ws-main">
+      {% block tab_content %}{% endblock %}
+    </div>
+    {# ---------- facts: what does not change by tab. A column on wide screens, a disclosure on narrow ones ---------- #}
+    <details class="ws-facts" id="ws-facts" open>
+      <summary>Property details</summary>
+      <div class="wf-sec">
+        <h2>Property</h2>
+        <dl>
+          <div><dt>Model</dt><dd>{{ ws_facts.model }}</dd></div>
+          {% if ws_facts.fee %}<div><dt>Fee</dt><dd>{{ ws_facts.fee }}</dd></div>{% endif %}
+          <div><dt>Status</dt><dd>{{ ws_facts.status }}</dd></div>
+          {% if not ws_facts.overhead %}<div><dt>Started</dt><dd>{{ ws_facts.started }}</dd></div>{% endif %}
+        </dl>
+      </div>
+      {% if not ws_facts.overhead %}
+      <div class="wf-sec">
+        <h2>Data</h2>
+        <dl>
+          <div><dt>Last imported</dt><dd>{% if ws_facts.imported %}<a href="{{ ws_facts.imported.href }}">{{ ws_facts.imported.when }}{% if ws_facts.imported.when %} · {% endif %}{{ ws_facts.imported.text }}</a>{% else %}—{% endif %}</dd></div>
+          <div><dt>Workbook check</dt><dd>
+            {% if ws_facts.source.key == 'review' %}<a class="st st-review" href="{{ ws_facts.source.href }}"><i aria-hidden="true">●</i> REVIEW</a>
+            {% elif ws_facts.source.key == 'pass' %}<a class="st st-pass" href="{{ ws_facts.source.href }}"><i aria-hidden="true">✓</i> PASS</a>
+            {% elif ws_facts.source.key == 'nocontrol' %}<a class="st st-nc" href="{{ ws_facts.source.href }}" title="Imported, but no control value exists to compare with"><i aria-hidden="true">○</i> NO CONTROL</a>
+            {% else %}<span class="st-q">No import for this period</span>{% endif %}</dd></div>
+          <div><dt>Evidence</dt><dd><a href="{{ cx('properties.documents_tab', property_id=prop.id) }}">Documents</a></dd></div>
+        </dl>
+      </div>
+      {% endif %}
+    </details>
+  </div>
+  </div>
+  <script>
+    (function () {
+      const d = document.getElementById('ws-facts'), body = d && d.parentElement;
+      if (!d) return;
+      let first = true;
+      const apply = () => { const wide = body.getBoundingClientRect().width >= 900; d.dataset.wide = wide ? '1' : '0'; if (wide) d.open = true; else if (first) d.open = false; first = false; };
+      apply(); window.addEventListener('resize', () => { const wide = body.getBoundingClientRect().width >= 900; if (wide !== (d.dataset.wide === '1')) { d.dataset.wide = wide ? '1' : '0'; d.open = wide; } });
+    })();
+  </script>
+{% endblock %}

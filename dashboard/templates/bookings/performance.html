@@ -1,0 +1,194 @@
+{% extends "bookings/_shell.html" %}
+{% from "_components.html" import section, delta, empty_state, pname %}
+{% block tab_content %}
+  {% call section("Portfolio occupancy", "Months with no bookings imported are left blank, not drawn as 0%") %}
+    <div class="card"><div class="chart-box" style="height:200px"><canvas id="portfolioChart" role="img" aria-label="Portfolio occupancy by month"></canvas></div></div>
+  {% endcall %}
+
+  {% call section("By property", current_month) %}
+    <div class="card"><div class="chart-box" style="height:{{ [rows|length * 34 + 30, 120]|max }}px"><canvas role="img" aria-label="Properties ranked by the selected measure" id="rankedChart"></canvas></div></div>
+  {% endcall %}
+
+  {% call section("Occupancy vs ADR", current_month) %}
+    <div class="card">
+      <div class="chart-box" style="height:340px"><canvas id="scatterChart" role="img" aria-label="Occupancy against ADR, one dot per property"></canvas></div>
+      <p class="note m-t3">Each dot is one property; click one to open its bookings. Busy at a low rate can mean it's priced too cheaply; quiet at a high rate can mean it's priced too high.</p>
+      <div id="scatter-legend" class="chan-legend mt2"></div>
+    </div>
+  {% endcall %}
+
+  {% call section("Occupancy heatmap", "Last 12 months, % of nights booked") %}
+    <div class="card flush" style="overflow-x:auto">
+      <table style="font-size:var(--fs-small)">
+        <thead><tr><th>Property</th>{% for m in heatmap_months %}<th class="num" style="padding:8px 6px">{{ m }}</th>{% endfor %}</tr></thead>
+        <tbody>
+          {% for r in heatmap_rows %}
+            <tr>
+              <td style="white-space:nowrap"><a href="{{ cx('properties.bookings', property_id=r.id) }}" title="{{ r.name }}">{{ r.name|short }}</a></td>
+              {% for v in r.cells %}
+                {% if v is none %}
+                  <td class="num" style="background:var(--surface-2); padding:4px"></td>
+                {% else %}
+                  <td class="num" style="background: rgba(14,159,110,{{ (v/100)|round(2) }}); color: {{ '#fff' if v > 55 else 'var(--ink)' }}; padding:4px">{{ v|round|int }}</td>
+                {% endif %}
+              {% endfor %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endcall %}
+
+  {% call section("By property", "Detail · " ~ current_month, "by-property") %}
+    <div class="card flush">
+      <table>
+        <thead><tr><th>Property</th><th class="num">Occupancy</th><th class="num">Booked nights</th><th class="num">Available nights</th><th class="num hide-sm">Gross Booking Revenue</th><th class="num hide-sm">ADR</th><th class="num hide-sm">RevPAR</th><th class="num hide-sm">Change vs prior period</th></tr></thead>
+        <tbody>
+          {% for r in rows %}
+            <tr>
+              <td><a href="{{ wsurl(ctx, 'properties.bookings', r.id) }}#booked-nights" title="{{ r.name }}">{{ pname(r.name) }}</a></td>
+              <td class="num">{{ '%.0f'|format(r.occupancy * 100) }}%</td>
+              <td class="num">{{ '%.0f'|format(r.days_booked) }}</td>
+              <td class="num">{{ '%.0f'|format(r.available) }}</td>
+              <td class="num hide-sm">{{ r.gross|money }}</td>
+              <td class="num hide-sm">{{ r.adr|money }}</td>
+              <td class="num hide-sm">{{ r.revpar|money }}</td>
+              <td class="num hide-sm">{% if r.delta is not none %}{{ delta(r.delta, '') }}{% else %}<span class="muted">—</span>{% endif %}</td>
+            </tr>
+          {% endfor %}
+          {% for r in idle_rows %}
+            <tr><td><a href="{{ wsurl(ctx, 'properties.bookings', r.id) }}#booked-nights" title="{{ r.name }}">{{ pname(r.name) }}</a> <span class="note">· {{ r.why }}</span></td>
+              <td class="num" colspan="3"><span class="zero" title="{{ 'No occupancy to show: nothing is recorded for this property in this period' if r.why == 'No data imported' else 'No occupancy to show: this property was not active in this period' }}">—</span></td>
+              <td class="num hide-sm" colspan="4"></td></tr>
+          {% endfor %}
+        </tbody>
+        <tfoot>
+          <tr class="recs-total"><td>Portfolio</td><td class="num">{{ '%.0f'|format(totals.occupancy * 100) }}%</td><td class="num">{{ '%.0f'|format(totals.days_booked) }}</td><td class="num">{{ '%.0f'|format(totals.available) }}</td>
+            <td class="num hide-sm">{{ totals.gross|money }}</td><td class="num hide-sm">{{ totals.adr|money }}</td><td class="num hide-sm">{{ totals.revpar|money }}</td><td class="hide-sm"></td></tr>
+        </tfoot>
+      </table>
+    </div>
+    <p class="note mt2">Occupancy = booked nights ÷ available nights. ADR = Gross Booking Revenue ÷ booked nights. RevPAR = Gross Booking Revenue ÷ available nights. Click a property for the records behind its nights.</p>
+  {% endcall %}
+
+  <script>
+    const months = {{ months_json|safe }};
+    const portfolio = {{ portfolio_json|safe }};
+    const occScale = (extra) => quietScales(pctShort, Object.assign({ y: { beginAtZero: true, max: 100, grid: { color: FS.grid }, border: { display: false }, ticks: { callback: pctShort, maxTicksLimit: 6 } } }, extra || {}));
+
+    new Chart(document.getElementById('portfolioChart'), {
+      type: 'line',
+      data: { labels: months, datasets: [{ label: 'Occupancy', data: portfolio, borderColor: FS.brand, backgroundColor: FS.brandSoft, fill: true, tension: 0.3, spanGaps: false }] },
+      options: { plugins: { legend: { display: false }, tooltip: { callbacks: { label: (i) => `Occupancy: ${pctShort(i.parsed.y)}` } } }, scales: occScale() },
+    });
+
+    const rankedLabels = {{ rows|map(attribute='name')|map('short')|list|tojson }};      // compact display names; the table below carries the full ones
+    const rankedValues = {{ rows|map(attribute='occupancy')|list|tojson }}.map(v => Math.round(v * 1000) / 10);
+    const barEndLabels = {
+      id: 'barEndLabels',
+      afterDatasetsDraw(chart) {
+        const meta = chart.getDatasetMeta(0);
+        const { ctx } = chart;
+        ctx.save();
+        ctx.font = '600 11px Inter, sans-serif';
+        ctx.fillStyle = '#46544e';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        meta.data.forEach((bar, i) => {
+          const v = chart.data.datasets[0].data[i];
+          if (v === null || v === undefined) return;
+          ctx.fillText(pctShort(v), bar.x + 6, bar.y);
+        });
+        ctx.restore();
+      },
+    };
+
+    new Chart(document.getElementById('rankedChart'), {
+      type: 'bar',
+      plugins: [barEndLabels],
+      data: { labels: rankedLabels, datasets: [{ label: 'Occupancy', data: rankedValues, backgroundColor: FS.brand }] },
+      options: {
+        indexAxis: 'y',
+        layout: { padding: { right: 34 } },
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: (i) => `Occupancy: ${pctShort(i.parsed.x)}` } } },
+        scales: {
+          x: { beginAtZero: true, max: 100, grid: { color: FS.grid }, border: { display: false }, ticks: { callback: pctShort } },
+          y: {
+            grid: { display: false }, border: { display: false },
+            // Chart.js under-measures long property names for a
+            // horizontal bar's category axis -- reserve real width for
+            // the longest label so it never gets clipped.
+            afterFit(scale) {
+              const ctx = scale.chart.ctx;
+              ctx.save();
+              ctx.font = "500 " + Chart.defaults.font.size + "px " + Chart.defaults.font.family;
+              const widest = Math.max(0, ...rankedLabels.map((l) => ctx.measureText(l).width));
+              ctx.restore();
+              scale.width = Math.ceil(widest) + 16;
+            },
+          },
+        },
+      },
+    });
+
+    const PROPERTY_BOOKINGS = {{ cx('properties.bookings', property_id='__ID__')|tojson }};
+    const DOT_COLORS = ['#0e9f6e', '#3f6489', '#b7791f', '#a34e7c', '#58645f', '#4c7ba0', '#8a6d3b', '#6f8f5e', '#9a5a5a', '#5a7a8a'];
+    const scatterPoints = {{ rows_json|safe }}.filter(r => r.adr > 0).map((r, i) => ({ x: r.adr, y: Math.round(r.occupancy * 1000) / 10, name: r.short, id: r.id, color: DOT_COLORS[i % DOT_COLORS.length] }));
+    const meanX = scatterPoints.reduce((a, p) => a + p.x, 0) / (scatterPoints.length || 1);
+    const meanY = scatterPoints.reduce((a, p) => a + p.y, 0) / (scatterPoints.length || 1);
+    // No point in charting the empty 0-50% band when nothing occupies it --
+    // start the axis just below the lowest flat instead of always at 0.
+    const minY = scatterPoints.length ? Math.max(0, Math.floor(Math.min(...scatterPoints.map(p => p.y)) / 10) * 10 - 10) : 0;
+
+    const scatterLegend = document.getElementById('scatter-legend');
+    if (scatterLegend) {
+      scatterLegend.innerHTML = scatterPoints.map(p =>
+        '<span class="chan"><i style="background:' + p.color + '"></i>' + p.name + '</span>').join('');
+    }
+
+    // Quiet quadrant guides at the portfolio averages -- no extra labels beyond the four corners.
+    const quadrants = {
+      id: 'quadrants',
+      afterDraw(chart) {
+        if (scatterPoints.length < 2) return;
+        const { ctx, chartArea: a, scales: { x, y } } = chart;
+        const px = x.getPixelForValue(meanX), py = y.getPixelForValue(meanY);
+        ctx.save();
+        ctx.strokeStyle = 'rgba(20,32,28,0.22)'; ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(px, a.top); ctx.lineTo(px, a.bottom); ctx.moveTo(a.left, py); ctx.lineTo(a.right, py); ctx.stroke();
+        ctx.setLineDash([]); ctx.fillStyle = 'rgba(20,32,28,0.38)'; ctx.font = '11px Inter, sans-serif';
+        ctx.textAlign = 'left';  ctx.fillText('Busy · lower rate', a.left + 6, a.top + 18);
+        ctx.textAlign = 'right'; ctx.fillText('Busy · higher rate', a.right - 6, a.top + 18);
+        ctx.textAlign = 'left';  ctx.fillText('Quiet · lower rate', a.left + 6, a.bottom - 10);
+        ctx.textAlign = 'right'; ctx.fillText('Quiet · higher rate', a.right - 6, a.bottom - 10);
+        ctx.restore();
+      },
+    };
+
+    new Chart(document.getElementById('scatterChart'), {
+      type: 'scatter',
+      plugins: [quadrants],
+      data: {
+        datasets: [{
+          label: 'Flats', data: scatterPoints,
+          backgroundColor: (c) => c.raw ? c.raw.color : FS.brand,
+          pointRadius: 6, pointHoverRadius: 9,
+          pointHoverBorderWidth: 3, pointHoverBorderColor: 'rgba(20,32,28,0.25)',
+        }],
+      },
+      options: {
+        layout: { padding: { top: 28, right: 14, bottom: 4, left: 4 } },
+        onHover: (e, els) => { e.native.target.style.cursor = els.length ? 'pointer' : 'default'; },
+        onClick: (e, els) => { if (els.length) location.href = PROPERTY_BOOKINGS.replace('__ID__', encodeURIComponent(scatterPoints[els[0].index].id)); },
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (i) => [`${i.raw.name}`, `ADR: ${moneyFull(i.raw.x)}`, `Occupancy: ${pctShort(i.raw.y)}`, 'Click to open bookings'] } },
+        },
+        scales: {
+          x: { title: { display: true, text: 'ADR' }, grid: { color: FS.grid }, border: { display: false }, ticks: { callback: moneyShort } },
+          y: { title: { display: true, text: 'Occupancy' }, min: minY, max: 100, grid: { color: FS.grid }, border: { display: false }, ticks: { callback: pctShort } },
+        },
+      },
+    });
+  </script>
+{% endblock %}

@@ -1,0 +1,6 @@
+{# Shared by the property tabs: where a record came from, as quiet metadata (batch and cell), never a box. #}
+{% macro src_cell(c) -%}
+  {%- if c.kind == 'workbook' -%}<a href="{{ url_for('imports.batch', batch_id=c.batch_id) }}#{{ c.anchor }}" onclick="event.stopPropagation()" title="Open the import and this property's reconciliation">Batch #{{ c.batch_id }}</a>{% if c.ref %} <span class="note">· {{ c.ref }}</span>{% endif %}
+  {%- elif c.kind == 'legacy' -%}<span class="note">Earlier Excel import</span>
+  {%- else -%}<span class="note">Entered by hand</span>{%- endif -%}
+{%- endmacro %}

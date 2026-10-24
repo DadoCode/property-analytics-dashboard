@@ -1,0 +1,476 @@
+"""SQLite access layer for the business dashboard. Thin wrappers only --
+routes in app.py own the request/response handling.
+
+Normalized schema (see scripts/migrate_to_normalized_schema.py for the
+one-time move from the older monthly_summary/expense_items/goals shape):
+KPIs are never stored as totals -- dashboard/kpis.py derives them on read
+from `bookings` (reservation-level income) and `transactions` (everything
+else, income or expense) for whatever property/date-range is asked for."""
+import os
+import sqlite3
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+# DASHBOARD_DB_PATH lets a test run point at a scratch copy so it can never
+# touch the real ledger; unset, it is always data/dashboard.db.
+DB_PATH = Path(os.environ["DASHBOARD_DB_PATH"]) if os.environ.get("DASHBOARD_DB_PATH") else ROOT / "data" / "dashboard.db"
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS properties (
+    id TEXT PRIMARY KEY,
+    code TEXT UNIQUE,
+    name TEXT NOT NULL,
+    address TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    type TEXT NOT NULL DEFAULT 'flat',   -- 'flat' | 'overhead'
+    start_date TEXT,
+    ical_url TEXT,
+    ical_synced_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS property_fixed_costs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    property_id TEXT NOT NULL REFERENCES properties(id),
+    label TEXT NOT NULL,          -- 'rent' | 'council_tax' | 'management_fee_pct' | ...
+    amount REAL NOT NULL,
+    is_percentage INTEGER NOT NULL DEFAULT 0,
+    effective_from TEXT,
+    effective_to TEXT
+);
+
+CREATE TABLE IF NOT EXISTS targets (
+    property_id TEXT NOT NULL REFERENCES properties(id),
+    year INTEGER NOT NULL,
+    month INTEGER NOT NULL,
+    revenue_target REAL, profit_target REAL, occupancy_target REAL,
+    source TEXT NOT NULL DEFAULT 'excel_import',
+    PRIMARY KEY (property_id, year, month)
+);
+
+CREATE TABLE IF NOT EXISTS property_targets (
+    property_id TEXT PRIMARY KEY REFERENCES properties(id),
+    revenue_target REAL, profit_target REAL, occupancy_target REAL,
+    updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS bookings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    property_id TEXT NOT NULL REFERENCES properties(id),
+    platform TEXT,                 -- 'airbnb' | 'booking_com' | 'direct' | 'other'
+    reservation_id TEXT,
+    check_in TEXT NOT NULL,        -- ISO date
+    check_out TEXT NOT NULL,       -- ISO date, exclusive (last night is check_out - 1 day)
+    gross_revenue REAL NOT NULL DEFAULT 0,
+    platform_fees REAL NOT NULL DEFAULT 0,
+    cleaning_fee REAL NOT NULL DEFAULT 0,
+    net_revenue REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'confirmed',   -- 'confirmed' | 'cancelled'
+    source TEXT NOT NULL DEFAULT 'excel_import',
+    document_id INTEGER REFERENCES documents(id)
+);
+
+-- Normalized vendor identity, so "top vendors" and a ledger filter can
+-- work off a stable id instead of grouping raw strings (which drift --
+-- "Amazon" vs "AMAZON.CO.UK" vs "Amazon UK"). transactions.vendor stays
+-- as the raw text every row already has (source of truth for what a
+-- document/manual entry actually said); vendor_id is the resolved link,
+-- set going forward by services/vendors.py and backfilled once below by
+-- exact-string match for existing rows.
+CREATE TABLE IF NOT EXISTS vendors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    property_id TEXT NOT NULL REFERENCES properties(id),
+    date TEXT NOT NULL,            -- ISO date (best available; 1st-of-month if only month known)
+    vendor TEXT, description TEXT,
+    amount REAL NOT NULL,          -- always a positive magnitude
+    direction TEXT NOT NULL DEFAULT 'expense',  -- 'income' | 'expense'
+    category TEXT NOT NULL DEFAULT 'other',
+    capex INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'excel_import',
+    document_id INTEGER REFERENCES documents(id),
+    recurring_cost_id INTEGER REFERENCES property_fixed_costs(id),
+    vendor_id INTEGER REFERENCES vendors(id),
+    edited_at TEXT, edited_by TEXT
+);
+
+CREATE TABLE IF NOT EXISTS documents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    property_id TEXT REFERENCES properties(id),
+    filename TEXT NOT NULL,
+    stored_path TEXT NOT NULL,
+    doc_type TEXT,
+    detected_year INTEGER, detected_month INTEGER,
+    status TEXT NOT NULL DEFAULT 'pending',   -- pending|extracting|extracted|reviewed|confirmed|failed
+    confidence REAL,
+    reviewed INTEGER NOT NULL DEFAULT 0,
+    extracted_json TEXT,
+    uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- One row per extracted/reviewed line item on a document -- the explicit
+-- lineage step between a source file and a confirmed ledger entry:
+-- Document -> document_items (extracted) -> document_items (reviewed) ->
+-- transactions/bookings (confirmed) -> kpis.py (derived). Not yet written
+-- to by app.py (Phase 2 adds the schema; Phase 6 wires the review page to
+-- it) -- documents.extracted_json remains the source of truth until then.
+CREATE TABLE IF NOT EXISTS document_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id INTEGER NOT NULL REFERENCES documents(id),
+    line_index INTEGER NOT NULL,
+    raw_description TEXT,
+    date TEXT, vendor TEXT, amount REAL,
+    direction TEXT,                -- 'income' | 'expense'
+    property_id TEXT REFERENCES properties(id),
+    category TEXT, capex INTEGER NOT NULL DEFAULT 0,
+    confidence REAL,
+    duplicate_of INTEGER REFERENCES transactions(id),
+    include INTEGER NOT NULL DEFAULT 1,
+    reviewed INTEGER NOT NULL DEFAULT 0,
+    original_extracted_value TEXT,   -- JSON snapshot of the raw extraction for this line
+    final_value TEXT,                -- JSON snapshot as confirmed, once reviewed
+    item_kind TEXT NOT NULL DEFAULT 'transaction',   -- 'transaction' | 'reservation'
+    check_in TEXT, check_out TEXT, reservation_id TEXT, platform TEXT,
+    gross_revenue REAL, platform_fees REAL, net_revenue REAL   -- reservation lines only
+);
+
+-- What documents each property is expected to produce each month, so
+-- "data completeness" is judged against that property's own real sources
+-- rather than one hardcoded list. Not yet read by app.py (Phase 2 adds the
+-- schema and seeds sensible defaults at Add-Property time; Phase 4 wires
+-- the Overview completeness card to it).
+CREATE TABLE IF NOT EXISTS property_data_requirements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    property_id TEXT NOT NULL REFERENCES properties(id),
+    source_type TEXT NOT NULL,     -- matches documents.doc_type
+    required INTEGER NOT NULL DEFAULT 1,
+    effective_from TEXT, effective_to TEXT
+);
+
+-- What changed on a financial record and what it used to say -- separate
+-- from transactions.edited_at/edited_by (which only says *that* a row was
+-- edited). Not yet written to by app.py (Phase 2 adds the schema; Phase 5
+-- routes every transaction edit through here).
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL,     -- 'transaction' | 'booking' | 'document_item'
+    entity_id INTEGER NOT NULL,
+    action TEXT NOT NULL,          -- 'create' | 'edit' | 'delete'
+    field TEXT, old_value TEXT, new_value TEXT,
+    timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+    user TEXT
+);
+
+-- One row per step in a document's ingestion life (uploaded, extracted,
+-- edited, confirmed, undone...), so a wrong number can be traced back to
+-- what the parser read and what the reviewer changed. Deliberately not an
+-- FK: the trail outlives nothing, but it must never block a delete.
+CREATE TABLE IF NOT EXISTS document_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id INTEGER NOT NULL,
+    event TEXT NOT NULL,           -- uploaded | extracted | extraction_failed | edited | confirmed | undone
+    summary TEXT,                  -- one human-readable line
+    detail TEXT,                   -- JSON, event-specific
+    timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Listing/location names a booking platform uses, remembered once you've said
+-- which property they are (or that they aren't one of yours), so the next
+-- statement is matched without being asked again.
+CREATE TABLE IF NOT EXISTS property_aliases (
+    alias TEXT PRIMARY KEY,            -- normalised listing text (lower-case letters and digits only)
+    label TEXT,                        -- the listing text as it was written
+    property_id TEXT,                  -- NULL when ignore=1
+    ignore INTEGER NOT NULL DEFAULT 0, -- 1 = "not one of my properties; leave these out"
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Which booking data feeds the KPIs for one property and month. A row exists
+-- ONLY when a person decided; importing a document never writes one. With no
+-- row: Excel history if the month has any, otherwise the detailed reservations
+-- (see services/sources.py). The Excel rows themselves are never altered.
+CREATE TABLE IF NOT EXISTS booking_source_state (
+    property_id TEXT NOT NULL REFERENCES properties(id),
+    month TEXT NOT NULL,                       -- 'YYYY-MM'
+    active_source TEXT NOT NULL,               -- 'legacy_aggregate' | 'detailed'
+    decided_at TEXT NOT NULL DEFAULT (datetime('now')),
+    decided_by TEXT,
+    note TEXT,
+    PRIMARY KEY (property_id, month)
+);
+
+-- Monthly workbook imports. A batch is one workbook applied for one month; the
+-- parsed content of the allowed sheets is kept (never the file itself, so
+-- nothing from a sheet we do not read is ever stored). import_batch_rows is the
+-- exact change log: rows the batch added and full copies of rows it removed,
+-- which is what makes "Undo import" restore the previous state exactly.
+CREATE TABLE IF NOT EXISTS import_batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    filename TEXT NOT NULL,
+    file_hash TEXT NOT NULL,
+    uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
+    workbook_year INTEGER,
+    period TEXT,                    -- 'YYYY-MM' the batch was applied for (NULL while only staged)
+    status TEXT NOT NULL DEFAULT 'staged',   -- staged | applied | undone | cancelled
+    applied_at TEXT, undone_at TEXT,
+    properties TEXT,                -- JSON list of property ids the batch touched
+    row_count INTEGER NOT NULL DEFAULT 0,
+    before_totals TEXT, after_totals TEXT,   -- JSON per property: income / costs / days
+    parsed TEXT,                    -- JSON: parsed allowed sheets
+    validation TEXT,                -- JSON: validation report
+    reconciliation TEXT,            -- JSON: reconciliation report at apply time
+    note TEXT,
+    kind TEXT NOT NULL DEFAULT 'workbook',   -- 'workbook' | 'cleanup'
+    rows_added INTEGER NOT NULL DEFAULT 0, rows_changed INTEGER NOT NULL DEFAULT 0, rows_removed INTEGER NOT NULL DEFAULT 0,
+    new_properties TEXT                      -- JSON list of property ids this batch created
+);
+
+CREATE TABLE IF NOT EXISTS import_batch_rows (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL REFERENCES import_batches(id),
+    op TEXT NOT NULL,               -- 'added' | 'removed' | 'source_state_added' | 'property_created' | 'property_updated' | 'alias_added' | 'sheet_map_added'
+    tbl TEXT NOT NULL,              -- 'transactions' | 'bookings' | 'booking_source_state' | 'properties' | ...
+    row_id INTEGER,                 -- id in tbl (NULL for booking_source_state)
+    row_json TEXT NOT NULL          -- the full row as it was (removed) / as written (added)
+);
+
+CREATE INDEX IF NOT EXISTS idx_import_rows_batch ON import_batch_rows(batch_id);
+
+-- Main Page business rows a person chose to leave out of the import for a month (a suspected duplicate of a property
+-- cost). Remembered so that importing the same workbook again still has nothing to do.
+-- Main Page business rows you have confirmed are genuine, separate expenses, so the importer stops flagging them as
+-- possible duplicates of a property cost. Keyed by what the row IS (month, label, amount), not by where it sits.
+CREATE TABLE IF NOT EXISTS import_distinct (
+    period TEXT NOT NULL, label_norm TEXT NOT NULL, amount REAL NOT NULL, label TEXT, note TEXT, batch_id INTEGER,
+    PRIMARY KEY (period, label_norm, amount)
+);
+
+CREATE TABLE IF NOT EXISTS import_exclusions (
+    period TEXT NOT NULL, source_ref TEXT NOT NULL, label TEXT, amount REAL, batch_id INTEGER,
+    PRIMARY KEY (period, source_ref)
+);
+
+-- Permanent identity of a property for the workbook import: which sheet code
+-- belongs to which property, and every name/code it is known by. The property
+-- id never changes when its display name does.
+CREATE TABLE IF NOT EXISTS workbook_sheet_map (
+    sheet_code TEXT PRIMARY KEY,          -- 'RV1', 'MPL', 'CNL' (the sheet is '<code><yy>')
+    property_id TEXT NOT NULL REFERENCES properties(id),
+    source TEXT,                          -- 'seed' | 'import #N' | 'manual'
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS property_identity_aliases (
+    alias_norm TEXT PRIMARY KEY,          -- lower-case letters and digits only
+    alias_text TEXT NOT NULL,
+    property_id TEXT NOT NULL REFERENCES properties(id),
+    kind TEXT,                            -- 'code' | 'name' | 'previous_name' | 'sheet'
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_document_events_doc ON document_events(document_id);
+CREATE INDEX IF NOT EXISTS idx_bookings_property_date ON bookings(property_id, check_in);
+CREATE INDEX IF NOT EXISTS idx_transactions_property_date ON transactions(property_id, date);
+CREATE INDEX IF NOT EXISTS idx_document_items_document ON document_items(document_id);
+CREATE INDEX IF NOT EXISTS idx_data_requirements_property ON property_data_requirements(property_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity_type, entity_id);
+"""
+
+AUTH_SCHEMA = """
+-- Per-person logins (hosted use). No public sign-up: rows are created only by scripts/manage_users.py. A disabled user (active=0) is signed out
+-- on their next request. Passwords are stored only as Werkzeug hashes.
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    display_name TEXT,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'owner',     -- 'owner' (can change things) | 'viewer' (read-only)
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_login_at TEXT,
+    password_changed_at TEXT
+);
+
+-- Failed sign-ins, kept in the database so the limit holds across every server worker and survives a restart.
+CREATE TABLE IF NOT EXISTS login_failures (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,            -- 'ip' | 'user'
+    key TEXT NOT NULL,
+    at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_login_failures_key ON login_failures(kind, key, at);
+"""
+
+
+
+def _busy_timeout_ms():
+    """How long a writer waits for another writer before giving up (DASH_SQLITE_BUSY_MS, default 25 s)."""
+    try:
+        return max(1000, int(os.environ.get("DASH_SQLITE_BUSY_MS") or 25000))
+    except ValueError:
+        return 25000
+
+
+def wal_enabled():
+    """WAL is switched on by DASH_SQLITE_WAL=1 (the server sets it). It is OFF by default so that simply running the app locally never
+    rewrites the header of an existing local database file."""
+    return (os.environ.get("DASH_SQLITE_WAL") or "").lower() in ("1", "true", "yes", "on")
+
+
+def get_conn():
+    # timeout= is SQLite's busy timeout: two people saving at once wait for each other instead of failing with "database is locked"
+    conn = sqlite3.connect(DB_PATH, timeout=_busy_timeout_ms() / 1000)
+    conn.row_factory = sqlite3.Row
+    conn.execute(f"PRAGMA busy_timeout = {_busy_timeout_ms()}")
+    conn.execute("PRAGMA foreign_keys = ON")
+    if wal_enabled():
+        # WAL lets readers and the one writer work at the same time; NORMAL is the recommended pairing (durable at every checkpoint, safe against app crashes)
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+    return conn
+
+
+def auth_tables_wanted():
+    """The sign-in tables are only created where sign-in is used (the server, or scripts/manage_users.py). A plain local run therefore never
+    adds anything to an existing local database."""
+    from services import runtime
+    return runtime.login_required()
+
+
+def ensure_schema(auth=None):
+    conn = get_conn()
+    conn.executescript(SCHEMA)
+    if auth or (auth is None and auth_tables_wanted()):
+        conn.executescript(AUTH_SCHEMA)
+    existing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(properties)")}
+    for col, ddl in [
+        ("ical_url", "TEXT"), ("ical_synced_at", "TEXT"),
+        ("type", "TEXT NOT NULL DEFAULT 'flat'"), ("start_date", "TEXT"),
+        ("is_managed", "INTEGER NOT NULL DEFAULT 0"),   # managed for an owner even when the fee % is not known yet
+        ("end_date", "TEXT"),                           # last day a property was part of the portfolio (optional; never invented)
+        ("management_fee_pct", "REAL"),  # NULL/0 = fully owned; e.g. 15 = a manager keeps 85%, this business earns 15% of revenue
+    ]:
+        if col not in existing_cols:
+            conn.execute(f"ALTER TABLE properties ADD COLUMN {col} {ddl}")
+    conn.execute("UPDATE properties SET is_managed=1 WHERE management_fee_pct>0 AND is_managed=0")     # idempotent backfill
+    tx_cols = {row["name"] for row in conn.execute("PRAGMA table_info(transactions)")}
+    vendor_id_is_new = "vendor_id" not in tx_cols
+    for col, ddl in [
+        ("recurring_cost_id", "INTEGER REFERENCES property_fixed_costs(id)"),
+        ("vendor_id", "INTEGER REFERENCES vendors(id)"),
+        ("edited_at", "TEXT"), ("edited_by", "TEXT"),
+    ]:
+        if col not in tx_cols:
+            conn.execute(f"ALTER TABLE transactions ADD COLUMN {col} {ddl}")
+    if vendor_id_is_new:
+        # One-time backfill: every distinct non-blank vendor string already
+        # in transactions gets a vendors row, matched by exact trimmed text
+        # (good enough for existing data -- fuzzy merging of near-duplicate
+        # vendor names isn't attempted here).
+        names = [r["vendor"].strip() for r in conn.execute(
+            "SELECT DISTINCT vendor FROM transactions WHERE vendor IS NOT NULL AND TRIM(vendor) != ''"
+        )]
+        for name in names:
+            conn.execute("INSERT OR IGNORE INTO vendors (name) VALUES (?)", (name,))
+        conn.execute("""
+            UPDATE transactions SET vendor_id = (
+                SELECT v.id FROM vendors v WHERE v.name = TRIM(transactions.vendor)
+            ) WHERE vendor IS NOT NULL AND TRIM(vendor) != ''
+        """)
+
+    for table in ("transactions", "bookings"):
+        cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for col, ddl in [("import_batch_id", "INTEGER"), ("source_ref", "TEXT")]:   # which workbook import wrote it, and from which cell
+            if col not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+
+    item_cols = {row["name"] for row in conn.execute("PRAGMA table_info(document_items)")}
+    for col, ddl in [
+        ("item_kind", "TEXT NOT NULL DEFAULT 'transaction'"), ("check_in", "TEXT"), ("check_out", "TEXT"),
+        ("reservation_id", "TEXT"), ("platform", "TEXT"), ("gross_revenue", "REAL"),
+        ("platform_fees", "REAL"), ("net_revenue", "REAL"),
+        ("source_page", "INTEGER"), ("source_row", "INTEGER"),   # where in the source file this line came from
+        ("dup_decision", "TEXT"),                                # 'keep' | 'exclude', chosen by the reviewer
+    ]:
+        if col not in item_cols:
+            conn.execute(f"ALTER TABLE document_items ADD COLUMN {col} {ddl}")
+
+    doc_info = list(conn.execute("PRAGMA table_info(documents)"))
+    doc_cols = {row["name"] for row in doc_info}
+    for col, ddl in [
+        ("detected_year", "INTEGER"), ("detected_month", "INTEGER"),
+        ("confidence", "REAL"), ("reviewed", "INTEGER NOT NULL DEFAULT 0"),
+    ]:
+        if col not in doc_cols:
+            conn.execute(f"ALTER TABLE documents ADD COLUMN {col} {ddl}")
+
+    property_id_not_null = any(r["name"] == "property_id" and r["notnull"] for r in doc_info)
+    if property_id_not_null:
+        # The Document Inbox needs to hold a file before a flat is known --
+        # rebuild the table with property_id nullable, keeping every row.
+        # legacy_alter_table=ON matters here: without it, RENAME silently
+        # rewrites *other* tables' `REFERENCES documents(id)` to point at
+        # the temporary documents_old name, which then breaks the moment
+        # that table is dropped (a classic SQLite foreign-key gotcha).
+        conn.executescript("""
+            PRAGMA legacy_alter_table = ON;
+            ALTER TABLE documents RENAME TO documents_old;
+            CREATE TABLE documents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                property_id TEXT REFERENCES properties(id),
+                filename TEXT NOT NULL,
+                stored_path TEXT NOT NULL,
+                doc_type TEXT,
+                detected_year INTEGER, detected_month INTEGER,
+                status TEXT NOT NULL DEFAULT 'pending',
+                confidence REAL,
+                reviewed INTEGER NOT NULL DEFAULT 0,
+                extracted_json TEXT,
+                uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT INTO documents SELECT id, property_id, filename, stored_path, doc_type,
+                detected_year, detected_month, status, confidence, reviewed, extracted_json, uploaded_at
+                FROM documents_old;
+            DROP TABLE documents_old;
+        """)
+
+    # Added after the legacy rebuild above (which recreates the table with
+    # only the original columns) so a rebuilt table still ends up with them.
+    doc_cols = {row["name"] for row in conn.execute("PRAGMA table_info(documents)")}
+    for col, ddl in [
+        ("file_hash", "TEXT"),                  # sha256 of the stored file, for exact-duplicate detection
+        ("file_size", "INTEGER"),
+        ("failure_reason", "TEXT"),             # why automatic extraction failed, in plain words
+        ("detection_json", "TEXT"),             # how property/period were decided + any warnings
+        ("duplicate_of_document", "INTEGER"),   # earlier upload this one looks like
+    ]:
+        if col not in doc_cols:
+            conn.execute(f"ALTER TABLE documents ADD COLUMN {col} {ddl}")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(file_hash)")
+    batch_cols = {row["name"] for row in conn.execute("PRAGMA table_info(import_batches)")}
+    for col, ddl in [("kind", "TEXT NOT NULL DEFAULT 'workbook'"), ("rows_added", "INTEGER NOT NULL DEFAULT 0"),
+                     ("rows_changed", "INTEGER NOT NULL DEFAULT 0"), ("rows_removed", "INTEGER NOT NULL DEFAULT 0"), ("new_properties", "TEXT")]:
+        if col not in batch_cols:
+            conn.execute(f"ALTER TABLE import_batches ADD COLUMN {col} {ddl}")
+    from services.workbook import identity       # additive, idempotent: sheet codes and names for properties that already exist
+    identity.seed(conn)
+    conn.commit()
+    conn.close()
+
+
+def slugify(text):
+    import re
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return slug or "flat"
+
+
+def unique_slug(conn, base):
+    slug = base
+    n = 2
+    while conn.execute("SELECT 1 FROM properties WHERE id = ?", (slug,)).fetchone():
+        slug = f"{base}-{n}"
+        n += 1
+    return slug

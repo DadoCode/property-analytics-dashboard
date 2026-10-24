@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% from "_components.html" import tabs %}
+{% block title %}Bookings — Fernhill Stays{% endblock %}
+{% block content %}
+  {# Portfolio and Activity are two views of the same evidence; Calendar (only when real reservations exist) and Performance are their own pages. #}
+  {% set items = [('portfolio', 'Portfolio', cx('bookings.index', keep_property=True)), ('activity', 'Activity', cx('bookings.index', keep_property=True, view='activity'))] %}
+  {% if has_calendar_data or active_bookings_tab == 'calendar' %}
+    {% set items = items + [('calendar', 'Calendar', url_for('bookings.calendar_tab') ~ nav_qs)] %}
+  {% endif %}
+  {% set items = items + [('performance', 'Performance', url_for('bookings.performance') ~ nav_qs, True)] %}
+  <div class="bk2">
+  {{ tabs(items, active_bookings_tab) }}
+  {% block tab_content %}{% endblock %}
+  </div>
+{% endblock %}

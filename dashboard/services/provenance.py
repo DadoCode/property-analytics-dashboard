@@ -1,0 +1,130 @@
+"""Where a recorded row came from, and whether the monthly workbook import vouches for it.
+
+Read-only helpers for the drilldowns. Nothing here writes, and nothing here calculates a financial figure: it only
+reads the `import_batch_id` / `source_ref` that the workbook import already stamped on each row it wrote, and the
+reconciliation result the import already stored on its batch."""
+import json
+
+from services.common import MONTH_NAMES
+
+MONTHS_IN = ("transactions", "bookings")
+
+
+def month_label(ym):
+    return f"{MONTH_NAMES[int(ym[5:7])]} {ym[:4]}" if ym else ""
+
+
+def _file_label(filename):
+    stem = (filename or "").rsplit(".", 1)[0]
+    return stem.replace("_", " ").strip() or "Monthly workbook"
+
+
+def is_workbook_row(row):
+    """A row written by an applied monthly workbook import: individually read-only, because workbook = ledger = dashboard."""
+    keys = row.keys()
+    return bool(("import_batch_id" in keys and row["import_batch_id"]) or ("source" in keys and row["source"] == "workbook"))
+
+
+def workbook_source(conn, row):
+    """Provenance of a transactions/bookings row: {"kind": "workbook", ...} for a row a workbook import wrote,
+    {"kind": "legacy", ...} for the older Excel history (which has no batch or cell to point at), else None."""
+    keys = row.keys()
+    batch_id = row["import_batch_id"] if "import_batch_id" in keys else None
+    if batch_id:
+        b = conn.execute("SELECT id, filename, period, applied_at, status FROM import_batches WHERE id=?", (batch_id,)).fetchone()
+        if b:
+            pid = row["property_id"]
+            return {"kind": "workbook", "batch_id": b["id"], "label": _file_label(b["filename"]), "filename": b["filename"],
+                    "period": b["period"], "period_label": month_label(b["period"]) if b["period"] else "",
+                    "applied_at": (b["applied_at"] or "")[:16], "status": b["status"],
+                    "ref": row["source_ref"] if "source_ref" in keys else None, "anchor": f"prop-{pid}", "property_id": pid}
+    if "source" in keys and row["source"] == "excel_import":
+        return {"kind": "legacy"}
+    return None
+
+
+def import_link(src_info):
+    """URL path to the applied import page, anchored at the property's reconciliation block."""
+    return f"/imports/{src_info['batch_id']}#{src_info['anchor']}"
+
+
+def review_status(conn, property_id, start_ym, end_ym):
+    """('REVIEW', batch_id) when the latest applied workbook import for any month in the range left this property in
+    REVIEW (same rule the applied-import page uses: a failed check, or a blank control with money imported against it);
+    ('PASS', batch_id) when it was imported cleanly; None when no workbook import covers it. The result is the one stored
+    on the batch at apply time, so nothing is recalculated here."""
+    seen = {}
+    for b in conn.execute("SELECT id, period, properties, reconciliation FROM import_batches WHERE kind='workbook' AND status='applied' "
+                          "AND period>=? AND period<=? ORDER BY id DESC", (start_ym, end_ym)):
+        if b["period"] in seen:
+            continue
+        if property_id in json.loads(b["properties"] or "[]"):
+            seen[b["period"]] = b
+    verdict = None
+    for ym in sorted(seen):
+        checks = rejudge_rate(conn, property_id, json.loads(seen[ym]["reconciliation"] or "{}").get(property_id, []))
+        flagged = [c for c in checks if c["status"] == "REVIEW" or (c["status"] == "NO CONTROL" and c["imported"] not in (0, 0.0, None))]
+        if flagged:
+            return "REVIEW", seen[ym]["id"]
+        verdict = verdict or ("PASS", seen[ym]["id"])
+    return verdict
+
+
+def control_state(conn, property_id, start_ym, end_ym):
+    """What the workbook's own checks say about a property, without guessing:
+      ("review", batch_id)     an import's check failed, or money was imported against a blank control
+      ("pass", batch_id)       at least one figure was compared with the workbook's control and agreed
+      ("nocontrol", batch_id)  imports cover it, but none of its figures had a control value to compare with
+      None                     no applied workbook import covers it in this range (that is NOT "no control": nothing was imported to check)
+    Read only; the checks are the ones stored on the batch at apply time."""
+    rv = review_status(conn, property_id, start_ym, end_ym)
+    if rv is None:
+        return None
+    if rv[0] == "REVIEW":
+        return ("review", rv[1])
+    seen = {}
+    for b in conn.execute("SELECT id, period, properties, reconciliation FROM import_batches WHERE kind='workbook' AND status='applied' "
+                          "AND period>=? AND period<=? ORDER BY id DESC", (start_ym, end_ym)):
+        if b["period"] not in seen and property_id in json.loads(b["properties"] or "[]"):
+            seen[b["period"]] = b
+    for b in seen.values():
+        checks = rejudge_rate(conn, property_id, json.loads(b["reconciliation"] or "{}").get(property_id, []))
+        if any(c["status"] == "PASS" for c in checks):
+            return ("pass", rv[1])
+    return ("nocontrol", rv[1])
+
+
+def rejudge_rate(conn, property_id, checks):
+    """The fee-rate check compares the fee actually recorded with the property's configured percentage, and the configuration can
+    change after an import (a decision to follow the workbook's rate resolves it). Re-judge that one check against the CURRENT
+    percentage with the importer's own tolerance (0.05 points); every other check stays exactly as stored. This is for the CURRENT operational
+    pills (Properties list, workspace tiles) only. The applied-import page never uses it: that page is an audit record and shows the stored
+    import-time result (see current_rate_context for the separate "current configuration" note)."""
+    row = conn.execute("SELECT management_fee_pct FROM properties WHERE id=?", (property_id,)).fetchone()
+    pct = row["management_fee_pct"] if row else None
+    out = []
+    for c in checks:
+        if c["metric"] == "Management fee rate" and pct and c.get("workbook") is not None:
+            ok = abs(c["workbook"] * 100 - pct) <= 0.05
+            c2 = dict(c, imported=round(pct / 100, 4), diff=round(c["workbook"] - pct / 100, 4), status="PASS" if ok else "REVIEW")
+            if ok and c["status"] != "PASS":
+                c2["note"] = f"Resolved since the import: the configured rate is now {pct:g}% (it was {c['imported'] * 100:g}% then)"
+            out.append(c2)
+        else:
+            out.append(c)
+    return out
+
+
+def current_rate_context(conn, property_id, checks):
+    """For the applied-import page: leave every stored check exactly as it was evaluated at import time, and ADD a separate `current`
+    annotation to a fee-rate check when the property's configured percentage has changed since. The historical status, imported (configured
+    at import) value and difference are never touched; this only says what the CURRENT configuration is and whether it now matches."""
+    row = conn.execute("SELECT management_fee_pct FROM properties WHERE id=?", (property_id,)).fetchone()
+    pct = row["management_fee_pct"] if row else None
+    out = []
+    for c in checks:
+        if c["metric"] == "Management fee rate" and pct and c.get("workbook") is not None and abs(c["imported"] * 100 - pct) > 0.05:
+            out.append(dict(c, current={"configured": pct, "recorded": c["workbook"] * 100, "matches": abs(c["workbook"] * 100 - pct) <= 0.05}))
+        else:
+            out.append(c)
+    return out

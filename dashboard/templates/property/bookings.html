@@ -1,0 +1,193 @@
+{% extends "property/_shell.html" %}
+{% from "_components.html" import section, empty_state, channel, mlink %}
+{% from "property/_macros.html" import src_cell %}
+{% block tab_content %}
+  {# Reservation-level records vs monthly totals: a workbook month carries booked nights and booking income as totals, with no individual reservations. #}
+  {% set filtered = filters.b_when or filters.b_platform or filters.b_source or filters.b_status %}
+  {% set monthly_only = (not bookings) and (not filtered) and (booked_nights or gross_booking_revenue) %}
+  {% set nothing = (not bookings) and (not filtered) and (not booked_nights) and (not gross_booking_revenue) %}
+  <p class="ws-sum">
+    <span class="si"><span class="sk">Reservations</span> <span class="sv">{{ '—' if (monthly_only or nothing) else bookings|length }}</span>{% if monthly_only %} <span class="note">monthly totals only</span>{% endif %}</span>
+    <span class="si"><a href="#booked-nights" title="See the booked nights behind this"><span class="sk">Booked nights</span> <span class="sv">{{ '—' if nothing else booked_nights }}</span></a></span>
+    <span class="si"><a href="#booked-nights" title="Booking revenue ÷ booked nights"><span class="sk" title="{{ METRIC_INFO.adr }}">ADR</span> <span class="sv">{{ '—' if nothing else adr|money }}</span></a></span>
+    <span class="si"><span class="sk">Avg stay</span> <span class="sv">{{ '%.1f nights'|format(avg_stay) if avg_stay else '—' }}</span></span>
+    <span class="si"><a href="#revenue-records" title="{{ METRIC_INFO.gross_booking_revenue }}"><span class="sk">Gross Booking Revenue</span> <span class="sv">{{ '—' if nothing else gross_booking_revenue|money }}</span></a></span>
+  </p>
+
+  <p class="note mt3">Reservations and booked nights come from the monthly workbook. <a href="{{ url_for('imports.index') }}">Import a workbook</a>. Booking statements are optional supporting evidence only.</p>
+
+  {% if not_active_now %}
+    <div class="card mt4"><div class="empty"><div class="empty-title">{{ 'Inactive' if not prop.active else 'Not active in this period' }}</div><div class="empty-body">{{ prop.name }} had no recorded activity in {{ ctx.display }}, so there is nothing to break down.</div></div></div>
+  {% else %}
+
+  {% call section("Revenue records", "The rows behind Gross Booking Revenue" ~ (" and Company Revenue" if not managed else ""), "revenue-records") %}
+    {% if records.income or records.reservations or records.monthly_total %}
+      <div class="card flush">
+        <table>
+          <thead><tr><th>Date</th><th>Type</th><th>Description</th><th class="num">Amount</th><th>Source</th></tr></thead>
+          <tbody>
+            {% for i in records.income %}
+              <tr class="clickable" hx-get="{{ url_for('bookings.booking_drawer' if i.drawer == 'booking' else 'expenses.transaction_drawer', **({'booking_id': i.id} if i.drawer == 'booking' else {'tx_id': i.id})) }}" hx-target="#drawer" hx-swap="innerHTML">
+                <td>{{ i.date }}</td><td>{{ i.kind }}</td><td class="truncate note">{{ i.text }}</td><td class="num">{{ i.amount|money2 }}</td><td>{{ src_cell(i.src) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+          <tfoot>
+            {% if records.booking_income and (records.monthly_total or records.reservations) %}<tr><td colspan="3">Booking income</td><td class="num">{{ records.booking_income|money2 }}</td><td></td></tr>{% endif %}
+            {% if records.monthly_total %}<tr><td colspan="3">Monthly booking total <span class="note">(recorded for the month, not individual reservations)</span></td><td class="num">{{ records.monthly_total|money2 }}</td><td></td></tr>{% endif %}
+            {% if records.reservations %}<tr><td colspan="3">Reservation-level bookings <span class="note">(listed under Reservations below)</span></td><td class="num">{{ records.reservations|money2 }}</td><td></td></tr>{% endif %}
+            <tr class="recs-total"><td colspan="3">Gross Booking Revenue</td><td class="num">{{ records.gross|money2 }}</td><td></td></tr>
+            {% if not managed %}
+              {% if records.other_income %}<tr><td colspan="3">Other income</td><td class="num">{{ records.other_income|money2 }}</td><td></td></tr>{% endif %}
+              <tr class="recs-total"><td colspan="3">Company Revenue</td><td class="num">{{ records.company_revenue|money2 }}</td><td></td></tr>
+            {% endif %}
+          </tfoot>
+        </table>
+      </div>
+      {% if (records.gross - records.kpi_gross)|abs > 0.005 %}<p class="note mt2">Difference from the Gross Booking Revenue tile: {{ (records.gross - records.kpi_gross)|money2 }}.</p>{% endif %}
+      {% if managed %}<p class="note mt2">Gross Booking Revenue is what guests paid. Most of it belongs to the property's owner: The company's own income from this property is the management fee below.</p>{% endif %}
+    {% else %}
+      <div class="card">{{ empty_state("No income recorded for " ~ ctx.display, "No booking-income rows or reservations are recorded for " ~ prop.name ~ " in this period.") }}</div>
+    {% endif %}
+  {% endcall %}
+
+  {% if managed %}
+    {% set fee = records.fee %}
+    {% call section("Management fee", "The record behind Management Fee Earned", "fees") %}
+      <div class="card flush">
+        <div style="padding:var(--s3) var(--s4); display:flex; flex-wrap:wrap; gap:var(--s3); align-items:baseline">
+          <span>Configured fee: <strong>{{ ('%g'|format(fee.pct) ~ '%') if fee.pct else 'not set' }}</strong></span>
+          {% if fee.rate is not none %}<span class="note">Recorded fee ÷ Gross Booking Revenue = {{ '%.1f'|format(fee.rate) }}%</span>{% endif %}
+          {% if records.review and records.review[0] == 'REVIEW' %}<a class="pill warn review-link" href="/imports/{{ records.review[1] }}#prop-{{ prop.id }}" title="The import that wrote these figures left this property in REVIEW. Open the reason.">REVIEW ›</a>
+          {% elif records.review %}<a class="pill pos review-link" href="/imports/{{ records.review[1] }}#prop-{{ prop.id }}" title="Reconciled at import">PASS ›</a>{% endif %}
+        </div>
+        {% if fee.rows %}
+          <table>
+            <thead><tr><th>Date</th><th>Fee row</th><th class="num">Amount</th><th>Source</th></tr></thead>
+            <tbody>
+              {% for r in fee.rows %}
+                <tr class="clickable" hx-get="{{ url_for('expenses.transaction_drawer', tx_id=r.id) }}" hx-target="#drawer" hx-swap="innerHTML">
+                  <td>{{ r.date }}</td><td class="truncate note">{{ r.text }}</td><td class="num">{{ r.amount|money2 }}</td><td>{{ src_cell(r.src) }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+            <tfoot><tr class="recs-total"><td colspan="2">Management Fee Earned</td><td class="num">{{ fee.value|money2 }}</td><td></td></tr></tfoot>
+          </table>
+        {% else %}
+          <div style="padding:0 var(--s4) var(--s3)">
+            {% if fee.estimated %}
+              <p class="note m0">No fee row is recorded for this period. The dashboard estimates it as the configured percentage × revenue: <strong>{{ fee.value|money2 }}</strong>. Nothing here was imported.</p>
+            {% else %}
+              <p class="note m0">No fee is recorded for this period, and no percentage is configured to estimate one: <strong>{{ fee.value|money2 }}</strong>.</p>
+            {% endif %}
+          </div>
+        {% endif %}
+      </div>
+    {% endcall %}
+  {% endif %}
+
+  {% call section("Booked nights", "The nights behind occupancy, ADR and RevPAR", "booked-nights") %}
+    <div class="card flush">
+      <div style="padding:var(--s3) var(--s4); display:grid; gap:4px; font-size:0.9rem">
+        <div><strong>Occupancy {{ '%.0f'|format(evidence.occupancy * 100) }}%</strong> <span class="note">= {{ evidence.booked }} booked nights ÷ {{ evidence.available }} available nights</span></div>
+        <div>ADR <strong>{{ evidence.adr|money2 }}</strong> <span class="note">= {{ evidence.gross|money2 }} Gross Booking Revenue ÷ {{ evidence.booked }} booked nights</span></div>
+        <div>RevPAR <strong>{{ evidence.revpar|money2 }}</strong> <span class="note">= {{ evidence.gross|money2 }} Gross Booking Revenue ÷ {{ evidence.available }} available nights</span></div>
+      </div>
+      {% if evidence.rows %}
+        <table>
+          <thead><tr><th>Stay / month</th><th>Record</th><th class="num">Nights</th><th>Source</th></tr></thead>
+          <tbody>
+            {% for i in evidence.rows %}
+              <tr class="clickable" hx-get="{{ url_for('bookings.booking_drawer', booking_id=i.id) }}" hx-target="#drawer" hx-swap="innerHTML">
+                <td>{{ i.check_in }} → {{ i.check_out }}</td><td>{{ 'Monthly total (Days Booked)' if i.aggregate else 'Reservation' }}</td><td class="num">{{ i.nights }}</td><td>{{ src_cell(i.src) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+          <tfoot><tr class="recs-total"><td colspan="2">Booked nights</td><td class="num">{{ evidence.booked }}</td><td></td></tr></tfoot>
+        </table>
+        {% if evidence.monthly_only %}<p class="note" style="padding:var(--s2) var(--s4) var(--s3); margin:0">Booked nights come from the month's recorded total. No individual reservations were imported for this period.</p>{% endif %}
+      {% else %}
+        <p class="note" style="padding:0 var(--s4) var(--s3); margin:0">No booked nights are recorded for this period.</p>
+      {% endif %}
+    </div>
+  {% endcall %}
+  {% endif %}
+
+  {% call section("Reservations", (total_rows ~ ' in this view') if total_rows else None) %}
+    {% if inactive_stored %}
+      <div class="flash info mb3">{{ inactive_stored }} of these reservation{{ 's are' if inactive_stored != 1 else ' is' }} stored but <strong>not counted in the figures above</strong>: the Excel history is still in charge of {{ 'those months' if inactive_stored != 1 else 'that month' }}. <a href="{{ url_for('reconcile.index') }}">Compare and choose on the Excel vs booking statements page</a>.</div>
+    {% endif %}
+    {# Filters only appear when there's something to choose between -- no
+       empty dropdowns for a property with one channel and one source. #}
+    {% if has_future or platforms|length > 1 or sources|length > 1 or has_cancelled %}
+      <form method="get" class="filter-bar">
+        {% for k, v in ctx_params.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+        <input type="hidden" name="b_sort" value="{{ b_sort }}"><input type="hidden" name="b_dir" value="{{ b_dir }}">
+        {% if has_future %}
+          <select name="b_when" onchange="this.form.submit()">
+            <option value="">All stays in period</option>
+            <option value="upcoming" {{ 'selected' if filters.b_when == 'upcoming' }}>Upcoming (nearest first)</option>
+            <option value="past" {{ 'selected' if filters.b_when == 'past' }}>Past stays</option>
+          </select>
+        {% endif %}
+        {% if platforms|length > 1 %}
+          <select name="b_platform" onchange="this.form.submit()">
+            <option value="">All channels</option>
+            {% for p in platforms %}<option value="{{ p }}" {{ 'selected' if filters.b_platform == p }}>{{ CHANNELS.get(p|channel_key, p|replace('_', ' ')|title) }}</option>{% endfor %}
+          </select>
+        {% endif %}
+        {% if sources|length > 1 %}
+          <select name="b_source" onchange="this.form.submit()">
+            <option value="">All sources</option>
+            {% for src in sources %}<option value="{{ src }}" {{ 'selected' if filters.b_source == src }}>{{ src|replace('_', ' ')|title }}</option>{% endfor %}
+          </select>
+        {% endif %}
+        {% if has_cancelled %}
+          <select name="b_status" onchange="this.form.submit()">
+            <option value="">Confirmed</option>
+            <option value="cancelled" {{ 'selected' if filters.b_status == 'cancelled' }}>Cancelled</option>
+            <option value="all" {{ 'selected' if filters.b_status == 'all' }}>All statuses</option>
+          </select>
+        {% endif %}
+        {% if filters.b_when or filters.b_platform or filters.b_source or filters.b_status %}<a class="clear-link" href="{{ cx('properties.bookings', property_id=prop.id) }}">Clear filters</a>{% endif %}
+      </form>
+    {% endif %}
+    <div class="card flush">
+      {% if bookings %}
+        <table>
+          <thead><tr>
+            <th>Platform</th>
+            <th><a class="sort {{ 'on' if b_sort == 'check_in' }}" href="{{ sort_href('check_in') }}">Check-in{% if b_sort == 'check_in' %} {{ '↓' if b_dir == 'desc' else '↑' }}{% endif %}</a></th>
+            <th><a class="sort {{ 'on' if b_sort == 'check_out' }}" href="{{ sort_href('check_out') }}">Check-out{% if b_sort == 'check_out' %} {{ '↓' if b_dir == 'desc' else '↑' }}{% endif %}</a></th>
+            <th class="num">Nights</th>
+            <th class="num"><a class="sort {{ 'on' if b_sort == 'gross' }}" href="{{ sort_href('gross') }}" title="{{ METRIC_INFO.gross_booking_revenue }}">Gross booking revenue{% if b_sort == 'gross' %} {{ '↓' if b_dir == 'desc' else '↑' }}{% endif %}</a></th>
+            <th class="num">Net revenue</th><th>Source</th>{% if has_cancelled %}<th>Status</th>{% endif %}
+          </tr></thead>
+          <tbody>
+            {% for b in bookings %}
+              <tr class="clickable" hx-get="{{ url_for('bookings.booking_drawer', booking_id=b.id) }}" hx-target="#drawer" hx-swap="innerHTML">
+                <td>{{ channel(b.platform) }}</td>
+                <td>{{ b.check_in }}</td>
+                <td>{{ b.check_out }}</td>
+                <td class="num">{{ b.nights }}</td>
+                <td class="num">{{ b.gross_revenue|money }}</td>
+                <td class="num">{{ b.net_revenue|money }}</td>
+                <td class="note">{{ b.source|replace('_', ' ')|title }}</td>
+                {% if has_cancelled %}<td>{{ b.status|title }}</td>{% endif %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        {% if monthly_only %}
+          {{ empty_state("No individual reservations imported", "Monthly booking totals are available for this period (see Booked nights and Revenue records above), but no individual reservation records were imported.") }}
+        {% elif filtered %}
+          {{ empty_state("No reservations match these filters", "Clear a filter or choose a different period.") }}
+        {% else %}
+          {{ empty_state("No booking data for " ~ ctx.display, "No reservations or monthly booking totals are recorded for " ~ prop.name ~ " in this period. Import the monthly workbook or choose a different period.", "Import workbook", url_for('imports.index')) }}
+        {% endif %}
+      {% endif %}
+    </div>
+    {% if total_rows > bookings|length %}<p class="note mt2">Showing the first {{ bookings|length }} of {{ total_rows }} reservations in this order.</p>{% endif %}
+  {% endcall %}
+{% endblock %}

@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Reports — Fernhill Stays{% endblock %}
+{% macro table(s) -%}
+  <div class="rp-scroll"><table class="rp-tbl {{ 'rp-fin' if s.columns|selectattr('fmt', 'equalto', 'delta')|list }}">
+    <thead><tr>{% for c in s.columns %}<th scope="col" class="{{ '' if c.fmt == 'text' else 'num' }}">{{ c.label }}</th>{% endfor %}</tr></thead>
+    <tbody>
+      {% for row in s.display_rows %}
+        {% set st = (s.row_styles[loop.index0] if s.row_styles else '') %}
+        <tr class="{{ 'rp-' ~ st if st }}">{% for cell in row %}<td class="{{ '' if s.columns[loop.index0].fmt == 'text' else 'num' }}{{ ' rp-dim' if cell == '-' }}">{{ cell }}</td>{% endfor %}</tr>
+      {% endfor %}
+    </tbody>
+  </table></div>
+{%- endmacro %}
+{% block content %}
+  <div class="rp">
+  <header class="rp-head">
+    <h1>Reports</h1>
+    <form method="get" action="{{ url_for('reports.index') }}" class="rp-ctl" id="rp-form">
+      <input type="hidden" name="type" value="{{ rtype }}">
+      {% if rtype in ('property_monthly', 'expense') %}
+        <label class="vh" for="rp-property">Property</label>
+        <select name="property" id="rp-property" onchange="this.form.submit()">
+          <option value="">{{ 'Choose a property' if rtype == 'property_monthly' else 'All properties' }}</option>
+          {% for p in flats %}<option value="{{ p.id }}" {{ 'selected' if p.id == values.property }}>{{ p.name|short }}</option>{% endfor %}
+        </select>
+      {% endif %}
+      {% if rtype in ('portfolio_monthly', 'property_monthly') %}
+        <label class="vh" for="rp-month">Month</label><input type="month" name="month" id="rp-month" value="{{ values.month }}" onchange="this.form.submit()">
+      {% elif rtype == 'annual_portfolio' %}
+        <label class="vh" for="rp-year">Year</label><input type="number" name="year" id="rp-year" value="{{ values.year }}" min="2000" max="2100" class="narrow" onchange="this.form.submit()">
+      {% else %}
+        <label class="vh" for="rp-from">From month</label><input type="month" name="from" id="rp-from" value="{{ values['from'] }}" onchange="this.form.submit()">
+        <span class="rp-to" aria-hidden="true">–</span>
+        <label class="vh" for="rp-to">To month</label><input type="month" name="to" id="rp-to" value="{{ values.to }}" onchange="this.form.submit()">
+      {% endif %}
+      <button type="submit" class="secondary rp-upd">Update</button>
+    </form>
+  </header>
+
+  <nav class="seg rp-seg" role="group" aria-label="Report type">
+    {% for t in type_links %}<a href="{{ t.href }}" class="{{ 'on' if t.on }}" aria-current="{{ 'true' if t.on else 'false' }}" title="{{ t.contents }}">{{ t.label }}</a>{% endfor %}
+  </nav>
+  <p class="rp-contents">{{ contents }}</p>
+
+  {% if message %}
+    <div class="pr-surface rp-empty"><p>{{ message }}</p></div>
+  {% else %}
+    <article class="pr-surface rp-doc" aria-label="{{ report.title }}: {{ report.subtitle }}">
+      <div class="rp-top">
+        <div>
+          <div class="rp-kick">{{ report.title|upper }}{% if report.model %} · {{ report.model|upper }}{% endif %}</div>
+          <h2 class="rp-title" {% if report.full_name %}title="{{ report.full_name }}"{% endif %}>{{ report.scope }}</h2>
+          <div class="rp-period">{{ report.period }}</div>
+        </div>
+        {% if not report.state %}
+        <div class="rp-actions" role="group" aria-label="Export this report">
+          <a class="btn" href="{{ url_for('reports.export', format='pdf', **export_params) }}">PDF</a>
+          <a class="btn secondary" href="{{ url_for('reports.export', format='xlsx', **export_params) }}">Excel</a>
+          <a class="btn secondary" href="{{ url_for('reports.export', format='csv', **export_params) }}">CSV</a>
+        </div>
+        {% endif %}
+      </div>
+
+      {% if report.state %}
+        <p class="rp-state">{{ report.state.text }}</p>
+      {% endif %}
+
+      {% if hero %}
+        <div class="rp-hero">
+          {% for h in hero %}<div><span class="rp-hl">{{ h.label }}{% if h.note %} <span class="rp-hn">· {{ h.note }}</span>{% endif %}</span><span class="rp-hv">{{ h.text }}</span></div>{% endfor %}
+        </div>
+      {% endif %}
+
+      {% for s in sections %}
+        <section class="rp-sec" aria-label="{{ s.heading }}">
+          {% if s.collapsed %}
+            <details class="rp-more"><summary>{{ s.heading }} <span class="rp-count">{{ s.display_rows|length }}</span></summary>
+              {% if s.display_rows %}{{ table(s) }}{% else %}<p class="rp-none">Nothing recorded.</p>{% endif %}
+              {% if s.note %}<p class="rp-note">{{ s.note }}</p>{% endif %}</details>
+          {% else %}
+            <h3>{{ s.heading }}</h3>
+            {% if s.display_rows %}{{ table(s) }}{% else %}<p class="rp-none">Nothing recorded for this period.</p>{% endif %}
+            {% if s.note %}<p class="rp-note">{{ s.note }}</p>{% endif %}
+          {% endif %}
+        </section>
+      {% endfor %}
+
+      <dl class="rp-foot">
+        {% for k, v in report.footer %}<div><dt>{{ k }}</dt><dd>{{ v }}</dd></div>{% endfor %}
+      </dl>
+    </article>
+  {% endif %}
+  <p class="rp-gen">Reports are generated on demand from the recorded data. Nothing is stored, so there is no history to list.</p>
+  </div>
+{% endblock %}

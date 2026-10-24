@@ -1,0 +1,134 @@
+{% extends "bookings/_shell.html" %}
+{% from "_components.html" import empty_state, pname %}
+{% from "property/_macros.html" import src_cell %}
+{% macro chan(platform) -%}{% if platform %}{% set k = platform|channel_key %}<span class="chan"><i class="chan-{{ k }}"></i>{{ CHANNELS[k] if k != 'other' else (platform|replace('_', ' ')|title) }}</span>{% else %}<span class="muted">—</span>{% endif %}{%- endmacro %}
+{% block tab_content %}
+  {# ---------- the band: the booking figures for the period, and what KIND of evidence stands behind them ---------- #}
+  <section class="bk-band" aria-label="Booking summary">
+    <div class="bk-metrics">
+      <div class="ps"><span class="ps-label">Booked nights</span><span class="ps-value">{{ '—' if summary.no_data else summary.booked|string }}</span><span class="ps-sub">{% if not summary.no_data %}of {{ summary.available }} available{% endif %}</span></div>
+      <div class="ps"><span class="ps-label">Occupancy</span><span class="ps-value">{{ '—' if summary.no_data else ('%.0f'|format(summary.occupancy * 100) ~ '%') }}</span></div>
+      <div class="ps"><span class="ps-label">Gross Booking Revenue<span class="info-dot" title="{{ METRIC_INFO.gross_booking_revenue }}" tabindex="0" aria-label="{{ METRIC_INFO.gross_booking_revenue }}">ⓘ</span></span><span class="ps-value">{{ '—' if summary.no_data else summary.gross|money }}</span><span class="ps-sub">booking revenue, not the company's</span></div>
+      <div class="ps"><span class="ps-label">ADR</span><span class="ps-value">{{ '—' if summary.no_data else summary.adr|money }}</span></div>
+    </div>
+    {% if rail %}
+    <div class="pb-rail">
+      <div class="rail-bar" role="group" aria-label="What kind of booking evidence each property has">
+        {% for x in rail %}<a class="rl rl-bk-{{ x.key }}" style="flex-basis:{{ x.pct }}%" href="{{ U(dtype=x.key) }}" aria-label="{{ x.label }}: {{ x.count }} of {{ rail|sum(attribute='count') }} properties. Show these."></a>{% endfor %}
+      </div>
+      <div class="rail-key">{% for x in rail %}<a href="{{ U(dtype=x.key) }}"><i class="dot dot-bk-{{ x.key }}" aria-hidden="true"></i>{{ x.label }} {{ x.count }}</a>{% endfor %}</div>
+    </div>
+    {% endif %}
+  </section>
+  {% if totals_only %}<p class="bk-note">Monthly booking totals are available for this period, but no individual reservation records were imported.</p>{% endif %}
+
+  {# ---------- controls: ghost menus, chips only when a filter is on ---------- #}
+  <div class="pr-bar bk-bar">
+    <form method="get" class="pr-search" role="search">
+      {% for k, v in {'from': ctx.from_input ~ '-01', 'to': ctx.to_input ~ '-01', 'compare': ctx.compare, 'property': ctx.property_id or '', 'model': model or '', 'dtype': dtype or '', 'channel': channel or '', 'sort': sort if sort != 'nights' else '', 'view': view if view != 'portfolio' else ''}.items() if v %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+      <input type="search" name="q" value="{{ q }}" placeholder="Search" aria-label="Search properties" autocomplete="off">
+    </form>
+    <details class="pr-menu"><summary aria-label="Filter by model">{{ 'Model: ' ~ model|capitalize if model else 'Model' }}<span class="caret">▾</span></summary>
+      <div class="pr-pop"><a href="{{ U(model=None) }}" class="{{ 'sel' if not model }}">All models</a><a href="{{ U(model='operated') }}" class="{{ 'sel' if model == 'operated' }}">Operated</a><a href="{{ U(model='managed') }}" class="{{ 'sel' if model == 'managed' }}">Managed</a></div></details>
+    <details class="pr-menu"><summary aria-label="Filter by data type">{{ 'Data: ' ~ dtypes[dtype] if dtype else 'Data type' }}<span class="caret">▾</span></summary>
+      <div class="pr-pop"><a href="{{ U(dtype=None) }}" class="{{ 'sel' if not dtype }}">Any</a>{% for k, label in dtypes.items() %}<a href="{{ U(dtype=k) }}" class="{{ 'sel' if dtype == k }}">{{ label }}</a>{% endfor %}</div></details>
+    {% if view == 'activity' and channels %}
+    <details class="pr-menu"><summary aria-label="Filter by channel">{{ 'Channel: ' ~ CHANNELS[channel] if channel else 'Channel' }}<span class="caret">▾</span></summary>
+      <div class="pr-pop"><a href="{{ U(channel=None) }}" class="{{ 'sel' if not channel }}">All channels</a>{% for k in channels %}<a href="{{ U(channel=k) }}" class="{{ 'sel' if channel == k }}">{{ CHANNELS[k] }}</a>{% endfor %}</div></details>
+    {% endif %}
+    {% if view == 'portfolio' %}
+    <details class="pr-menu"><summary aria-label="Sort the list">Sort: {{ sorts[sort] }}<span class="caret">▾</span></summary>
+      <div class="pr-pop">{% for k, label in sorts.items() %}<a href="{{ U(sort=k) }}" class="{{ 'sel' if sort == k }}">{{ label }}</a>{% endfor %}</div></details>
+    {% endif %}
+  </div>
+  {% if q or model or dtype or channel %}
+    <div class="pr-chips" aria-label="Active filters">
+      {% if q %}<a class="chip-x" href="{{ U(q=None) }}" aria-label="Remove search “{{ q }}”">“{{ q }}” <i aria-hidden="true">×</i></a>{% endif %}
+      {% if model %}<a class="chip-x" href="{{ U(model=None) }}" aria-label="Remove filter {{ model|capitalize }}">{{ model|capitalize }} <i aria-hidden="true">×</i></a>{% endif %}
+      {% if dtype %}<a class="chip-x" href="{{ U(dtype=None) }}" aria-label="Remove filter {{ dtypes[dtype] }}">{{ dtypes[dtype] }} <i aria-hidden="true">×</i></a>{% endif %}
+      {% if channel %}<a class="chip-x" href="{{ U(channel=None) }}" aria-label="Remove filter {{ CHANNELS[channel] }}">{{ CHANNELS[channel] }} <i aria-hidden="true">×</i></a>{% endif %}
+      <a class="chip-reset" href="{{ U(q=None, model=None, dtype=None, channel=None) }}">Reset</a>
+    </div>
+  {% endif %}
+
+  {% if no_data %}
+    {{ empty_state("No data imported for this period.", "Choose a different period, or import the monthly workbook.", "Import monthly workbook", url_for('imports.index')) }}
+  {% elif view == 'portfolio' %}
+  {# ---------- PORTFOLIO: one row per property ---------- #}
+  <div class="pr-surface bk-surface">
+    {% if rows %}
+    <table class="bk-table" id="bk-table">
+      <thead><tr><th scope="col">Property</th><th scope="col" class="num">Booked nights</th><th scope="col">Occupancy</th><th scope="col" class="num">Gross Booking Revenue</th><th scope="col">Evidence</th><th scope="col"><span class="vh">Details</span></th></tr></thead>
+      <tbody>
+        {% for r in rows %}
+          <tr class="bk-row clickable" data-attn="{{ 1 if r.flags else 0 }}" hx-get="{{ url_for('bookings.property_drawer', property_id=r.id, **{'from': ctx.from_input ~ '-01', 'to': ctx.to_input ~ '-01', 'compare': ctx.compare}) }}" hx-target="#drawer" hx-swap="innerHTML">
+            <td class="c-name"><a class="pr-name" href="{{ wsurl(ctx, 'properties.bookings', r.id) }}" onclick="event.stopPropagation()" title="{{ r.name }}">{{ pname(r.name, true) }}</a><span class="pr-model">{{ r.model }}</span></td>
+            {% if r.idle %}
+              <td class="c-none" colspan="3"><span class="st-q">{{ 'Inactive' if r.inactive else 'Not active in this period' }}</span></td>
+              <td></td>
+            {% elif r.no_data %}
+              <td class="c-none" colspan="3"><span class="zero" title="Nothing is recorded for this property in this period">—</span></td>
+              <td><span class="st-q">No data</span></td>
+            {% else %}
+              <td class="num c-nights"><a class="mlink" href="{{ wsurl(ctx, 'properties.bookings', r.id) }}#booked-nights" onclick="event.stopPropagation()" aria-label="Booked nights for {{ r.name }}">{{ r.booked }}</a><span class="of"> / {{ r.available }}</span></td>
+              <td class="c-occ2">
+                <span class="occ2"><b>{{ '%.0f'|format(r.occupancy * 100) }}%</b>
+                {% if r.strip is not none %}<span class="dstrip" role="img" aria-label="Booked on {{ r.strip|length }} of {{ ndays }} days">{% for d in range(ndays) %}<i{% if d in r.strip %} class="b"{% endif %}></i>{% endfor %}</span>
+                {% else %}<span class="mrail" role="img" aria-label="{{ r.booked }} of {{ r.available }} nights booked, from {{ 'a monthly total' if r.dtype != 'none' else 'no booking data' }}"><i style="width:{{ [r.occupancy * 100, 100]|min|round(0) }}%"></i></span>{% endif %}
+                </span>
+              </td>
+              <td class="num c-gbr"><a class="mlink" href="{{ wsurl(ctx, 'properties.bookings', r.id) }}#revenue-records" onclick="event.stopPropagation()" aria-label="Revenue records for {{ r.name }}">{{ r.gross|money }}</a></td>
+              <td class="c-evid">
+                {% if r.dtype in ('reservations', 'mixed') %}<span class="ev ev-res"><i aria-hidden="true">●</i> Reservation records</span>
+                {% elif r.dtype == 'monthly' %}<span class="ev ev-mon"><i aria-hidden="true">◌</i> Monthly total</span>
+                {% else %}<span class="ev ev-none">— No booking data</span>{% endif %}
+                {% if r.source %}<span class="ev-src">{% if r.source.href %}<a href="{{ r.source.href }}" onclick="event.stopPropagation()">{{ r.source.text.replace('Monthly total · ', '') }}</a>{% else %}{{ r.source.text.replace('Monthly total · ', '') }}{% endif %}</span>{% endif %}
+                {% for f in r.flags if f != 'No booking data' %}{% if f == 'Review' %}<a class="st-note ev-flag" href="{{ r.review_href }}" onclick="event.stopPropagation()">REVIEW ›</a>{% else %}<span class="st-note ev-flag">{{ f }}</span>{% endif %}{% endfor %}
+              </td>
+            {% endif %}
+            <td class="c-go"><button type="button" class="row-open" aria-label="Booking evidence for {{ r.name }}" hx-get="{{ url_for('bookings.property_drawer', property_id=r.id, **{'from': ctx.from_input ~ '-01', 'to': ctx.to_input ~ '-01', 'compare': ctx.compare}) }}" hx-target="#drawer" hx-swap="innerHTML" onclick="event.stopPropagation()">›</button></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      {{ empty_state("No properties match", "Try a different search or reset the filters.", "Reset", U(q=None, model=None, dtype=None)) }}
+    {% endif %}
+  </div>
+  {% else %}
+  {# ---------- ACTIVITY: a flat chronological list; reservation, monthly total and income line are visibly different things ---------- #}
+  <div class="pr-surface bk-surface">
+    {% if activity %}
+    <table class="bk-table bk-act" id="bk-act">
+      <thead><tr><th scope="col">Record</th><th scope="col">Property</th><th scope="col">Type</th><th scope="col">Channel</th><th scope="col" class="num">Nights</th><th scope="col" class="num">Amount</th><th scope="col">Source</th><th scope="col"><span class="vh">Details</span></th></tr></thead>
+      {% set grp = namespace(m=None) %}
+      <tbody>
+      {% for r in activity %}
+        {% set ym = r.date[:7] %}
+        {% if ym != grp.m %}{% set grp.m = ym %}<tr class="grp"><th colspan="8" scope="rowgroup">{{ month_label(ym) }}</th></tr>{% endif %}
+        <tr class="bk-row clickable ak-{{ r.type }}" hx-get="{{ r.url }}" hx-target="#drawer" hx-swap="innerHTML">
+          <td class="a-rec">{% if r.type == 'monthly' %}<span class="a-label">{{ r.label }}</span>{% else %}<span class="a-label">{{ r.label }}</span>{% endif %}</td>
+          <td class="a-prop"><a href="{{ wsurl(ctx, 'properties.bookings', r.pid) }}" onclick="event.stopPropagation()" title="{{ r.property }}">{{ r.property|short }}</a></td>
+          <td class="a-type">{% if r.type == 'reservation' %}<span class="ev ev-res"><i aria-hidden="true">●</i> Reservation</span>{% elif r.type == 'monthly' %}<span class="ev ev-mon"><i aria-hidden="true">◌</i> Monthly total</span>{% else %}<span class="ev ev-inc"><i aria-hidden="true">▫</i> Income line</span>{% endif %}</td>
+          <td class="a-chan">{{ chan(r.channel) if r.type == 'reservation' else '' }}{% if r.type != 'reservation' %}<span class="muted">—</span>{% endif %}</td>
+          <td class="num">{{ r.nights if r.nights is not none else '—' }}</td>
+          <td class="num a-amt">{{ r.amount|money2 if r.amount is not none else '—' }}</td>
+          <td class="a-src">{{ src_cell(r.src) }}</td>
+          <td class="c-go"><button type="button" class="row-open" aria-label="Open record: {{ r.label }}, {{ r.property|short }}" hx-get="{{ r.url }}" hx-target="#drawer" hx-swap="innerHTML" onclick="event.stopPropagation()">›</button></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+      <tfoot><tr class="recs-total"><td colspan="4">{{ act_total.n }} record{{ 's' if act_total.n != 1 }}{% if act_total.more %} <span class="note">· showing the first {{ activity|length }}</span>{% endif %}</td><td class="num">{{ act_total.nights }}</td><td class="num">{{ act_total.amount|money2 }}</td><td colspan="2"></td></tr></tfoot>
+    </table>
+    {% elif totals_only or no_data %}
+      {{ empty_state("No individual reservations imported", "Monthly booking totals are available for this period, but no individual reservation records were imported.") if totals_only else empty_state("No data imported for this period.", "Choose a different period, or import the monthly workbook.", "Import monthly workbook", url_for('imports.index')) }}
+    {% else %}
+      {{ empty_state("No booking records match", "Try a different period, or reset the filters.", "Reset", U(q=None, model=None, dtype=None, channel=None)) }}
+    {% endif %}
+  </div>
+  {% endif %}
+  <script>
+    document.addEventListener('click', (e) => { document.querySelectorAll('.pr-menu[open]').forEach((m) => { if (!m.contains(e.target)) m.open = false; }); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.querySelectorAll('.pr-menu[open]').forEach((m) => { m.open = false; }); });
+  </script>
+{% endblock %}

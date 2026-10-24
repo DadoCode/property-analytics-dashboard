@@ -1,0 +1,39 @@
+<div class="drawer-head">
+  <div style="min-width:0">
+    <div class="drawer-title" title="{{ b.name }}">{{ b.name|short }}</div>
+    <div class="note">{{ metric_label }} · {{ month_label }}</div>
+  </div>
+  <button type="button" class="drawer-close" onclick="closeDrawer()" aria-label="Close">&times;</button>
+</div>
+<div class="drawer-section">
+  <div class="drawer-field"><span>Metric</span><strong>{{ metric_label }}{% if r.owner_side %} (owner-side){% endif %}</strong></div>
+  <div class="drawer-field"><span>Actual</span><strong>{{ r.actual_text }}</strong></div>
+  {% if r.mode == 'target' %}
+    <div class="drawer-field"><span>Target</span><strong>{{ r.target_text }}</strong></div>
+    <div class="drawer-field"><span>Variance</span><strong>{% if r.variance_text %}{{ r.variance_text }} · {{ r.status_text }}{% elif r.note %}{{ r.note }}{% else %}—{% endif %}</strong></div>
+    {% if r.pct is not none %}<div class="drawer-field"><span>Attainment</span><strong>{{ r.pct }}%</strong></div>{% endif %}
+  {% elif r.mode == 'benchmark' %}
+    <div class="drawer-field"><span>Recorded average</span><strong>{{ r.benchmark_text }}</strong></div>
+    <div class="drawer-field"><span>Difference from recorded average</span><strong>{% if r.variance_text %}{{ r.variance_text }}{% elif r.note %}{{ r.note }}{% else %}—{% endif %}</strong></div>
+  {% else %}
+    <div class="drawer-field"><span>Target</span><strong>No target set</strong></div>
+  {% endif %}
+  <div class="drawer-field"><span>Trend</span><strong>{% if r.trend and cmp_label %}{{ r.trend.arrow }} {{ r.trend.text }} vs {{ cmp_label }}{% elif cmp_label %}No figure for {{ cmp_label }}{% else %}Comparison off{% endif %}</strong></div>
+  <div class="drawer-field"><span>Comparison source</span><strong>{% if r.mode == 'target' %}Set by you{% elif r.mode == 'benchmark' %}Recorded average{% else %}—{% endif %}</strong></div>
+  {% if r.source_detail %}<div class="drawer-field"><span>Average basis</span><strong>{{ r.source_detail }}</strong></div>{% endif %}
+  <div class="drawer-field"><span>Period</span><strong>{{ month_label }}</strong></div>
+  <div class="drawer-field"><span>Property</span><strong>{{ b.name|short }} · {{ 'Managed' if b.model == 'managed' else 'Operated' }}</strong></div>
+  <p class="note m-t2">{{ meaning }}</p>
+</div>
+{% if recent %}
+<div class="drawer-section">
+  <div class="note" style="text-transform:uppercase; letter-spacing:0.05em; margin-bottom:6px">Recent months</div>
+  {% for m in recent %}
+    <div class="drawer-field"><span>{{ m.label }}{% if m.current %} (this month){% endif %}</span><strong>{{ m.value }}</strong></div>
+  {% endfor %}
+</div>
+{% endif %}
+<div class="drawer-actions mt4">
+  <a class="btn" href="#" hx-get="{{ edit_url }}" hx-target="#drawer" hx-swap="innerHTML">Edit targets</a>
+  <a class="btn secondary" href="{{ perf_url }}">Open Performance ›</a>
+</div>

@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% from "_components.html" import empty_state, pname %}
+{% block title %}Expenses — Fernhill Stays{% endblock %}
+{% macro menu(spec) -%}
+  {% set label, aria, active, options = spec %}
+  <details class="pr-menu"><summary aria-label="{{ aria }}">{{ active or label }}<span class="caret">▾</span></summary>
+    <div class="pr-pop ex-pop">{% for text, href, sel in options %}<a href="{{ href }}" class="{{ 'sel' if sel }}">{{ text }}</a>{% endfor %}</div></details>
+{%- endmacro %}
+{% macro row(t) -%}
+  <tr class="ex-row clickable" hx-get="{{ url_for('expenses.transaction_drawer', tx_id=t.id) }}" hx-target="#drawer" hx-swap="innerHTML">
+    <td class="nw ex-date">{{ t.date_label }}<span class="vh"> ({{ t.date }})</span></td>
+    <td class="ex-main"><span class="ex-vendor">{{ t.vendor or t.description or '—' }}</span>{% if t.vendor and t.description %}<span class="ex-desc">{{ t.description }}</span>{% endif %}<span class="ex-src2">{{ t.source.text }}</span></td>
+    <td class="ex-where"><span class="ex-prop" title="{{ t.property_name }}">{% if t.business %}Business{% else %}{{ pname(t.property_name, true) }}{% endif %}</span><span class="ex-scope">{{ t.scope_text }}</span></td>
+    <td class="ex-cat">{{ t.category }}{% if t.capex %}<span class="ex-capex">Capex</span>{% endif %}</td>
+    <td class="ex-src">{% if t.source.href %}<a href="{{ t.source.href }}" onclick="event.stopPropagation()" title="{{ t.source.title }}">{{ t.source.text }}</a>{% else %}{{ t.source.text }}{% endif %}</td>
+    <td class="num ex-amt">{{ t.amount|money2 }}{% if t.reversal %}<span class="ex-rev">Reversal / credit</span>{% endif %}</td>
+  </tr>
+{%- endmacro %}
+{% block content %}
+  <div class="ex2">
+  <div class="ex-views">
+    <div class="seg" role="group" aria-label="View">
+      {% for label, href, on in quick %}<a href="{{ href }}" class="{{ 'on' if on }}" aria-current="{{ 'true' if on else 'false' }}">{{ label }}</a>{% endfor %}
+    </div>
+  </div>
+
+  <div id="ex-live">
+  {# the band: this ledger view, summed. It is the sum of the rows below, never a separate calculation. #}
+  <section class="bk-band ex-band" aria-label="Spend in this view">
+    <div class="ex-metrics">
+      <div class="ps"><span class="ps-label">{{ band.label }}</span><span class="ps-value">{{ '—' if no_data else band.value|money }}</span>
+        <span class="ps-sub">{% if not no_data and band.delta is not none and compare_label %}{{ '↑' if band.delta > 0 else '↓' if band.delta < 0 else '→' }} {{ '%.0f'|format(band.delta|abs) }}% vs {{ compare_label }}{% endif %}</span></div>
+      {% if band.split %}
+        <div class="ps"><span class="ps-label">Property Costs</span><span class="ps-value">{{ '—' if no_data else band.property|money }}</span></div>
+        <div class="ps"><span class="ps-label">Business Costs</span><span class="ps-value">{{ '—' if no_data else band.business|money }}</span></div>
+      {% endif %}
+      <div class="ps"><span class="ps-label">Transactions</span><span class="ps-value">{{ '—' if no_data else band.n }}</span>
+        <span class="ps-sub">{% if not no_data %}Opex {{ band.opex|money }} · Capex {{ band.capex|money }}{% endif %}</span></div>
+    </div>
+  </section>
+  {% if no_data %}<p class="nodata-line">No data imported for this period. <a href="{{ url_for('imports.index') }}">Import monthly workbook ›</a></p>{% endif %}
+
+  <div class="pr-bar ex-bar" id="ledger">
+    <form method="get" class="pr-search" role="search" id="ex-search">
+      {% for k, v in base_params.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+      {% if scope %}<input type="hidden" name="scope" value="{{ scope }}">{% endif %}
+      {% for k, v in f.items() if v and k != 't_q' %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+      {% if t_group %}<input type="hidden" name="t_group" value="{{ t_group }}">{% endif %}
+      {% if (t_sort, t_dir) != ('date', 'desc') %}<input type="hidden" name="t_sort" value="{{ t_sort }}"><input type="hidden" name="t_dir" value="{{ t_dir }}">{% endif %}
+      <input type="search" name="t_q" id="t_q" value="{{ f.t_q }}" placeholder="Search vendor or description" aria-label="Search vendor or description" autocomplete="off">
+    </form>
+    {% for m in menus %}{{ menu(m) }}{% endfor %}
+    {{ menu(group_menu) }}
+    {{ menu(sort_menu) }}
+  </div>
+  {% if chips %}
+    <div class="pr-chips" aria-label="Active filters">
+      {% for c in chips %}<a class="chip-x" href="{{ c.href }}" aria-label="Remove filter {{ c.label }}">{{ c.label }} <i aria-hidden="true">×</i></a>{% endfor %}
+      <a class="chip-reset" href="{{ U(t_month=None, t_scope=None, t_type=None, t_category=None, t_vendor=None, t_source=None, t_batch=None, t_q=None, model=None) }}">Reset</a>
+    </div>
+  {% endif %}
+
+  <div class="pr-surface bk-surface ex-surface">
+    {% if ledger %}
+      <table class="bk-table ex-table" id="ex-table">
+        <thead><tr><th scope="col">Date</th><th scope="col">Vendor / description</th><th scope="col">Property / scope</th><th scope="col">Category</th><th scope="col">Source</th><th scope="col" class="num">Amount</th></tr></thead>
+        {% if groups %}
+          {% for g in groups %}
+            <tbody>
+              <tr class="grp"><th colspan="6" scope="rowgroup"><span class="g-name">{{ g.label }}</span><span class="g-meta">{{ g.n }} transaction{{ 's' if g.n != 1 }} · {{ g.amt|money2 }}</span>{% if g.href %}<a class="g-go" href="{{ g.href }}" aria-label="Show only {{ g.label }}">Show only ›</a>{% endif %}</th></tr>
+              {% for t in g.rows %}{{ row(t) }}{% endfor %}
+              {% if g.more > 0 %}<tr class="more"><td colspan="6">+ {{ g.more }} more in this group{% if g.href %} · <a href="{{ g.href }}">Show all</a>{% endif %}</td></tr>{% endif %}
+            </tbody>
+          {% endfor %}
+        {% else %}
+          <tbody>{% for t in ledger %}{{ row(t) }}{% endfor %}</tbody>
+        {% endif %}
+        <tfoot><tr class="recs-total"><td colspan="5">{{ ledger_total.n }} transaction{{ 's' if ledger_total.n != 1 }}{% if truncated %} <span class="note">· showing the first {{ ledger|length }}</span>{% endif %}</td><td class="num">{{ ledger_total.amt|money2 }}</td></tr></tfoot>
+      </table>
+    {% else %}
+      {{ empty_state("No transactions match", "Nothing in this period fits these filters. Remove a filter or change the period.", "Reset filters", U(t_month=None, t_scope=None, t_type=None, t_category=None, t_vendor=None, t_source=None, t_batch=None, t_q=None, model=None)) }}
+    {% endif %}
+  </div>
+  </div>
+
+  <script>
+    (function () {
+      // filter as you type: swap the band and ledger in place and keep the URL shareable; Enter still submits the form normally
+      let timer = null, seq = 0;
+      document.addEventListener('input', (e) => {
+        if (!e.target || e.target.id !== 't_q') return;
+        clearTimeout(timer);
+        timer = setTimeout(async () => {
+          const q = document.getElementById('t_q'), form = document.getElementById('ex-search'); if (!q || !form) return;
+          const params = new URLSearchParams(new FormData(form)); if (!q.value.trim()) params.delete('t_q');
+          const url = '?' + params.toString(), mine = ++seq;
+          try {
+            const html = await (await fetch(url)).text();
+            if (mine !== seq) return;
+            const doc = new DOMParser().parseFromString(html, 'text/html'), next = doc.getElementById('ex-live'), cur = document.getElementById('ex-live');
+            if (!next || !cur) { location.href = url; return; }
+            const pos = q.selectionStart;
+            cur.replaceWith(next);
+            history.replaceState(null, '', url);
+            const nq = document.getElementById('t_q'); nq.focus(); nq.setSelectionRange(pos, pos);
+            if (window.htmx) window.htmx.process(next);
+          } catch (err) { location.href = url; }
+        }, 300);
+      });
+    })();
+    document.addEventListener('click', (e) => { document.querySelectorAll('.pr-menu[open]').forEach((m) => { if (!m.contains(e.target)) m.open = false; }); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.querySelectorAll('.pr-menu[open]').forEach((m) => { m.open = false; }); });
+    // the selected transaction stays marked in the ledger while its drawer is open
+    document.body.addEventListener('htmx:beforeRequest', (e) => { const tr = e.detail.elt && e.detail.elt.closest && e.detail.elt.closest('tr.ex-row'); if (!tr) return; document.querySelectorAll('tr.ex-row.sel').forEach((r) => r.classList.remove('sel')); tr.classList.add('sel'); });
+    new MutationObserver(() => { if (!document.getElementById('drawer').classList.contains('open')) document.querySelectorAll('tr.ex-row.sel').forEach((r) => r.classList.remove('sel')); }).observe(document.getElementById('drawer'), { attributes: true, attributeFilter: ['class'] });
+  </script>
+  </div>
+{% endblock %}
