@@ -4,6 +4,8 @@ An operations and analytics system for a short-term-rental portfolio: bookings, 
 
 I built it to replace a spreadsheet-based monthly reporting process for a real serviced-accommodation business, and it is in daily use there. This repository is a **public, sanitised version**: the code and features are the same, but all data is synthetic, the business is renamed to a fictional one (*Fernhill Stays*), and production deployment, server configuration and backup tooling have been removed.
 
+**Live demo (synthetic data, read-only):** <https://fernhill-property-dashboard.vercel.app>
+
 ![Overview](docs/images/overview.png)
 
 ## Features
